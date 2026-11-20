@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
 from backend.app.config import IS_POSTGRES, ALLOWED_ORIGINS, DEMO_MODE
-from backend.app.storage.database import init_db, get_db
+from backend.app.storage.database import init_db, get_db, fail_stale_training_jobs
 
 from backend.app.api.v1.auth import router as auth_router
 from backend.app.api.v1.stations import router as stations_router
@@ -28,6 +28,9 @@ async def lifespan(app: FastAPI):
     logger.info(f"Initializing SkyGuard-AI Database ({db_type})...")
     init_db()
     logger.info(f"Database schema initialized successfully ({db_type}).")
+    stale = fail_stale_training_jobs()
+    if stale:
+        logger.warning(f"Marked {stale} training job(s) left RUNNING by a previous process as FAILED (interrupted by restart).")
     
     # Start Background Weather Poller
     weather_task = asyncio.create_task(weather_service.poll_loop()) if os.getenv("WEATHER_POLL_ENABLED", "true").lower() == "true" else None

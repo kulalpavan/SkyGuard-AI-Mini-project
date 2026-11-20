@@ -114,7 +114,11 @@ def get_training_job_status(
         "current_stage": current_stage,
         "completed_stages": completed,
         "progress": progress,
-        "error_message": job.get("error_message")
+        "error_message": job.get("error_message"),
+        "model_version": job.get("model_version"),
+        "rows_used": job.get("rows_used"),
+        "started_at": job.get("started_at"),
+        "completed_at": job.get("completed_at")
     }
 
 

@@ -105,12 +105,7 @@ class StationAdaptiveTrainingService:
             scores = [forest.score_sample(x) for x in validation]
             rate = sum(s >= forest.threshold for s in scores) / len(scores)
             incumbent = get_active_model_record(station_id)
-            incumbent_scores = []
-            if incumbent:
-                for i, row in enumerate(holdout):
-                    result = self.score_observation(station_id, row, history=rows[max(0,split+i-12):split+i])
-                    if result.get('has_model'):
-                        incumbent_scores.append(result['is_anomaly'])
+            incumbent_scores = self._incumbent_anomaly_flags(incumbent, holdout, rows, split) if incumbent else []
             agreement = sum(old == (new >= forest.threshold) for old,new in zip(incumbent_scores,scores)) / len(scores) if len(incumbent_scores) == len(scores) else None
             metrics = {'evaluation_type': 'unlabelled_temporal_holdout', 'evaluated_at': dt.datetime.now(dt.timezone.utc).isoformat(),
                 'samples': len(scores), 'fit_samples': len(cleaned), 'holdout_start': holdout[0]['timestamp'], 'holdout_end': holdout[-1]['timestamp'],
@@ -160,6 +155,42 @@ class StationAdaptiveTrainingService:
         except Exception as error:
             logging.getLogger(__name__).exception("Training job %s failed", job_id)
             update_training_job(job_id, 'FAILED', error_message=str(error), current_stage='Validation failed', completed_stages=completed)
+
+    def _incumbent_anomaly_flags(self, incumbent_record, holdout, rows, split):
+        """Score holdout rows against the incumbent model, artifact loaded once.
+
+        Returns the per-row is_anomaly flags, or [] when the incumbent cannot
+        be scored (no artifact / legacy schema). The decision per row is
+        identical to score_observation — same transform, same forest, same
+        threshold — but without the per-row artifact load and the TreeSHAP
+        attribution the incumbent-agreement metric never uses. The old path
+        did both for every holdout row, which made retraining take ~24 s
+        while the UI sat on "Training Isolation Forest" with no visible
+        progress. Invalid rows are skipped, exactly as score_observation
+        reports them with has_model=False.
+        """
+        record = incumbent_record
+        if not record:
+            return []
+        try:
+            artifact = model_storage_service.load_artifact(record['model_location'])
+        except (ValueError, OSError):
+            return []
+        if not artifact or artifact.get('schema_version', 1) < 2:
+            return []
+        card = artifact['model_card']
+        forest = IsolationForest.from_dict(artifact['model_weights'])
+        flags = []
+        for i, row in enumerate(holdout):
+            r = dict(row)
+            r['timestamp'] = instant(r.get('timestamp') or dt.datetime.now(dt.timezone.utc).isoformat()).isoformat()
+            if not valid_core(r):
+                continue
+            vector = feature_engine.transform(
+                r, artifact['climatology'], card['normalization_stats'],
+                rows[max(0, split + i - 12):split + i])
+            flags.append(forest.score_sample(vector) >= forest.threshold)
+        return flags
 
     def activate(self, station_id, version):
         with get_db() as conn:

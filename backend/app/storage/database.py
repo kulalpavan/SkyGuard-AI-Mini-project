@@ -1476,6 +1476,28 @@ def update_training_job_stage(job_id: int, current_stage: str, completed_stages:
         """, (current_stage, completed_json, job_id))
 
 
+def fail_stale_training_jobs(reason: str = "Training was interrupted by a server restart before it finished.") -> int:
+    """Mark jobs left RUNNING by a previous process as FAILED.
+
+    A training job runs in a background task of the server process. If the
+    server restarts mid-job the job can never complete, and the status
+    endpoint would otherwise report it RUNNING forever — the UI would spin
+    with no way to tell it is dead. Called once at startup so the job
+    shows a clear failure with the real reason instead.
+    Returns the number of jobs marked failed.
+    """
+    now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("""
+            UPDATE training_jobs
+            SET status = 'FAILED', completed_at = ?, error_message = ?,
+                current_stage = 'Interrupted by server restart'
+            WHERE status = 'RUNNING'
+        """, (now_iso, reason))
+        return cur.rowcount
+
+
 def get_training_job(job_id: int) -> Optional[Dict[str, Any]]:
     with get_db() as conn:
         cur = conn.cursor()
