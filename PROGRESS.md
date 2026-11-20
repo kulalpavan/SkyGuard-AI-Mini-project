@@ -109,7 +109,7 @@ SkyGuard-AI/
 Two roles exist. Role is baked into the JWT token at login time and cannot be changed without re-authentication.
 
 ### Role 1: Central Admin
-Default credentials: `admin` / `sentinel2026`
+Default credentials: `admin` / `Sentinel2026`
 
 | Capability | Status |
 |-----------|--------|
@@ -129,7 +129,7 @@ Default credentials: `admin` / `sentinel2026`
 | Export fleet telemetry data (JSON) | WORKING |
 
 ### Role 2: Station Operator
-Default credentials: station `username` / `sentinel2026`
+Default credentials: station `username` / `Sentinel2026`
 
 | Capability | Status |
 |-----------|--------|
