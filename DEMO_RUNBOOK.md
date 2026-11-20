@@ -311,8 +311,9 @@ banner sits at the top of the view, above the raw scores and evidence.
   the second inject reports **MERGED INTO OPEN INCIDENT** when the
   readings fold into the already-open incident instead of opening a
   duplicate. (Two rapid identical spikes are the exception, by design:
-  the pipeline reads the second one as a sustained offset, root cause
-  `CALIBRATION_DRIFT` rather than `THERMAL_SPIKE`, so it opens a second
+  the pipeline reads the second one as a sustained-offset fault — a
+  different root cause than `THERMAL_SPIKE` (measured live as
+  `SENSOR_NOISE_DEGRADATION`), so it opens a second
   incident — send one normal frame between spikes if the demo needs the
   merge case.) A **Send 3 Normal Frames to Recover** button sends the §5c
   recovery frames in one click: the frames are built from the station's
@@ -695,7 +696,10 @@ records it as `QC_CALIBRATE_FROM_HISTORY`, distinct from a hand edit
 
 **Automatic:** the first training run for a station with no envelope
 at all auto-calibrates from its history. An admin override (or an
-earlier calibration) is never overwritten.
+earlier calibration) is never overwritten. Note for the demo: after a
+Train run the envelope may already read CALIBRATED FROM HISTORY before
+the button is clicked — that is this auto-calibration, not stale state;
+clicking the button re-calibrates to the same values.
 
 **Verified live 2026-11-20:** AWS-02 calibrated from the UI to
 T 24.23–29.35 °C, RH 74.47–94.12 %, P 1003.92–1012.37 hPa from 2,617
