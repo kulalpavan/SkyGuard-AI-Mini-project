@@ -17,12 +17,21 @@ export const FleetMap = () => {
 
   const targetStation = stations.find(s => s.id === activeStationId) || stations[0];
 
+  // Signature of everything the map layers depict. The fleet poll replaces
+  // the stations array with new objects every 5 s; rebuilding all markers
+  // on every poll destroyed any open popup and re-animated the view, so a
+  // popup could never survive long enough to use its buttons (e.g. "Select
+  // as Radar Center"). The layers are rebuilt only when something depicted
+  // actually changed; a new observation still refreshes them.
+  const renderedKeyRef = useRef(null);
+
   useEffect(() => {
     if (!stations || stations.length === 0) {
       if (mapInstanceRef.current) {
         mapInstanceRef.current.remove();
         mapInstanceRef.current = null;
       }
+      renderedKeyRef.current = null;
       return;
     }
     if (!mapContainerRef.current) return;
@@ -48,9 +57,26 @@ export const FleetMap = () => {
 
       L.control.zoom({ position: 'bottomright' }).addTo(map);
       mapInstanceRef.current = map;
+      // A freshly created map has no layers yet, whatever the signature
+      // says — without this, React StrictMode's double-mount (dev server)
+      // leaves the remounted map with no markers at all.
+      renderedKeyRef.current = null;
     }
 
     const map = mapInstanceRef.current;
+
+    const signature = JSON.stringify({
+      radius: neighborRadiusKm,
+      target: activeStationId,
+      stations: stations.map(st => [
+        st.id, st.lat, st.lon, st.status, st.source_timestamp,
+        st.sensors?.temperature?.value, st.sensors?.humidity?.value,
+        st.sensors?.pressure?.value, st.ml_model?.model_id,
+        st.final_assessment?.classification,
+      ]),
+    });
+    if (renderedKeyRef.current === signature) return; // nothing depicted changed
+    renderedKeyRef.current = signature;
 
     // Pan to target station smoothly if it changed
     if (targetStation && targetStation.lat && targetStation.lon) {
@@ -190,6 +216,7 @@ export const FleetMap = () => {
         mapInstanceRef.current.remove();
         mapInstanceRef.current = null;
       }
+      renderedKeyRef.current = null;
     };
   }, []);
 

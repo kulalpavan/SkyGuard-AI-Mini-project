@@ -363,6 +363,18 @@ class ApiClient {
     return await this.request(`/stations/${stationId}/qc`);
   }
 
+  // Persists a station's normal envelope (temperature / humidity / pressure
+  // min-max) via PUT /admin/stations/{id}/qc. Admin only. The backend
+  // writes the change to the config_audit ledger and returns the saved
+  // config. The pipeline enforces the envelope on every new observation
+  // (a reading outside it sets the z_qc evidence flag).
+  async updateStationQC(stationId, payload) {
+    return await this.request(`/admin/stations/${stationId}/qc`, {
+      method: "PUT",
+      body: JSON.stringify(payload)
+    });
+  }
+
   // -------------------------------------------------------------------------
   // Field Maintenance & Sensor Calibration Endpoints
   // -------------------------------------------------------------------------

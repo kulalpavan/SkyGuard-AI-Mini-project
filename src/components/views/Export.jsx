@@ -33,9 +33,12 @@ export const Export = () => {
         quality_standards: "WMO-No. 8 / IMD AWS Specification",
         fleet_summary: {
           total_stations: stations.length,
+          // A station counts as suspect when its latest assessment is
+          // anything other than NORMAL (e.g. LOCALIZED_ANOMALY_UNCONFIRMED);
+          // AWAITING_DATA / INACTIVE stations have no assessment yet.
           normal: stations.filter(s => s.status === 'NORMAL').length,
-          suspect: stations.filter(s => s.status === 'SUSPECT' || s.status === 'CRITICAL').length,
-          extreme: stations.filter(s => s.status === 'EXTREME').length,
+          suspect: stations.filter(s => s.status && !['NORMAL', 'AWAITING_DATA', 'INACTIVE'].includes(s.status)).length,
+          extreme: stations.filter(s => s.status === 'EXTREME' || s.status === 'REGIONAL_EVENT').length,
           open_incidents: incidents.filter(i => i.status === 'open').length
         },
         telemetry_records: stations.map(s => ({
@@ -107,7 +110,10 @@ export const Export = () => {
       </div>
       <div className="cyber-card-body">
         <p style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', marginBottom: '14px' }}>
-          All exported records include deterministic QC pass flags, ML anomaly scores, and cryptographic SHA-256 hashes to guarantee data immutability for downstream numerical weather prediction (NWP).
+          Each record holds the station's latest assessed readings with their WMO quality flags,
+          plus a SHA-256 hash of the whole payload so the export can be checked for tampering.
+          The file contains one record per registered station — including stations that have
+          not reported yet, whose measurements are null.
         </p>
 
         <div style={{ background: '#050811', border: '1px solid var(--border-medium)', borderRadius: '4px', padding: '14px', overflowX: 'auto', maxHeight: '420px' }}>

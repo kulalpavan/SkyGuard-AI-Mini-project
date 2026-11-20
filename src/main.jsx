@@ -5,6 +5,11 @@ import { WeatherProvider } from './context/WeatherContext';
 import { App } from './App';
 
 // Import exact stylesheets (100% Zero Visual Redesign)
+// Leaflet's CSS is bundled from node_modules, not loaded from a CDN:
+// the unpkg link this replaced never loaded in offline/sandboxed
+// browsers, which left every Leaflet pane `position: static` — station
+// pins rendered ~2800px below the map and popups never opened.
+import 'leaflet/dist/leaflet.css';
 import './styles/cyberpunk-theme.css';
 import './styles/dashboard.css';
 import './styles/components.css';

@@ -143,6 +143,16 @@ Wiring, as verified — no `.env` file needed:
 Log in as **Central Admin** using that box. The dashboard (Command Center)
 should show both stations; the Fleet Map shows them at the coordinates above.
 
+Log in as a **Station Operator** from the login screen's STATION OPERATOR tab
+with username `demo_aws-01` (Udupi) or `demo_aws-02` (Dakshina Kannada) and
+password `Station2026`. The operator sees only their own station: Live Cockpit
+HUD, Hardware Telemetry, Edge Buffer & Sync, and the Fleet Map. (The seed used
+to store the literal string "hash" as these accounts' password hash, which
+`verify_password()` can never accept — no operator could log in at all.
+`scripts/demo_checklist.py` now seeds a real hash of `Station2026`; an
+existing database is never re-seeded, so on an old DB reset the two demo
+passwords from Station Credentials, or wipe it (§1) and restart.)
+
 ## 5. Live telemetry — the exact frames to send
 
 Get a token first (the password is the one shown in the login box in §4;
@@ -264,7 +274,10 @@ Acknowledging first from the Incidents view also works:
    **Fill evaluator credentials**, log in.
 2. **(0:20) Command Center + Fleet Map** — both stations live: AWS-01 Udupi
    and AWS-02 Dakshina Kannada, status NORMAL, latest readings shown.
-   (Data behind this view: `GET /stations/fleet/live`.)
+   (Data behind this view: `GET /stations/fleet/live`.) The map's base tiles
+   come from Esri's CDN and need internet; the pins, radius circle and peer
+   vectors are drawn locally and work without tiles. Click a pin to open its
+   popup — it stays open while the fleet refreshes every 5 s.
 3. **(0:50) ESP32 Live Monitor** — show the latest AWS-01 frame.
 4. **(1:10) Inject the spike** — run the §5b curl in a terminal (or the
    ESP32 sensor simulator, `ESP32/sensor_simulator.html`, pointed at

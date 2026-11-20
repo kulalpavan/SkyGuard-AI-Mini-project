@@ -24,7 +24,15 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from backend.app.storage.database import get_db, insert_telemetry_batch, init_db
+from backend.app.auth.security import hash_password
 from backend.app.config import DATABASE_URL, IS_POSTGRES
+
+# Demo password for the two seeded station-operator accounts
+# (demo_aws-01 / demo_aws-02). It used to be the literal string "hash",
+# which verify_password() can never accept, so no operator could ever log
+# in to the demo. Documented in DEMO_RUNBOOK.md §4 alongside the admin
+# credentials; demo-only, never a production password.
+DEMO_OPERATOR_PASSWORD = "Station2026"
 
 # Prototype stations for the SIH demo (must match the paper / runbook).
 # NOTE: AWS-01 was previously seeded here as "Bengaluru Urban" (12.9716, 77.5946),
@@ -84,7 +92,7 @@ def seed_demo_stations():
                 """INSERT INTO stations (station_id, station_name, username, password_hash,
                    latitude, longitude, elevation, region, status, created_at, updated_at)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (sid, info["name"], f"demo_{sid.lower()}", "hash",
+                (sid, info["name"], f"demo_{sid.lower()}", hash_password(DEMO_OPERATOR_PASSWORD),
                  info["lat"], info["lon"], info["elev"], info["region"], "ACTIVE", now, now),
             )
         conn.commit()

@@ -23,11 +23,21 @@ export const StationDiagnostics = () => {
     );
   }
 
-  const temp = station.sensors?.temperature?.value ?? '--';
-  const hum = station.sensors?.humidity?.value ?? '--';
-  const pres = station.sensors?.pressure?.value ?? '--';
-  const wind = station.sensors?.wind_speed?.value ?? 14;
-  const batteryPct = Math.round(Math.min(100, Math.max(0, ((station.battery - 11.0) / 2.0) * 100))) || 91;
+  const temp = station.sensors?.temperature?.value ?? null;
+  const hum = station.sensors?.humidity?.value ?? null;
+  const pres = station.sensors?.pressure?.value ?? null;
+  // Wind, battery, signal, firmware and uptime only exist when the station
+  // actually reports them. This screen used to invent them (wind defaulted
+  // to 14 km/h, battery to 91%, and solar / network / gateway internals
+  // were hardcoded constants) — now anything unreported shows as "—".
+  const wind = station.sensors?.wind_speed?.value ?? null;
+  const battery = typeof station.battery === 'number' ? station.battery : null;
+  const batteryPct = battery === null ? null
+    : Math.round(Math.min(100, Math.max(0, ((battery - 11.0) / 2.0) * 100)));
+  const batteryLow = battery !== null && battery < 11.8;
+  const signal = typeof station.signal === 'number' ? station.signal : null;
+  const firmware = station.firmware ?? null;
+  const uptimeS = typeof station.uptime_s === 'number' ? station.uptime_s : null;
 
   return (
     <div className="cyber-card">
@@ -50,9 +60,9 @@ export const StationDiagnostics = () => {
               <i className="fa-solid fa-temperature-half text-cyan"></i> Temperature
             </div>
             <div style={{ fontFamily: 'var(--font-tactical)', fontSize: '1.75rem', fontWeight: 900, color: 'var(--neon-cyan)' }}>
-              {temp} <span style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>°C</span>
+              {temp ?? '—'} <span style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>°C</span>
             </div>
-            <div style={{ fontSize: '0.66rem', color: 'var(--neon-green)', marginTop: '4px' }}>Nominal Range</div>
+            <div style={{ fontSize: '0.66rem', color: 'var(--neon-green)', marginTop: '4px' }}>{temp === null ? 'No reading' : 'Nominal Range'}</div>
           </div>
 
           <div style={{ background: 'rgba(10,15,29,0.85)', border: '1px solid var(--border-subtle)', borderRadius: '6px', padding: '14px', textAlign: 'center' }}>
@@ -60,9 +70,9 @@ export const StationDiagnostics = () => {
               <i className="fa-solid fa-droplet text-green"></i> Humidity
             </div>
             <div style={{ fontFamily: 'var(--font-tactical)', fontSize: '1.75rem', fontWeight: 900, color: 'var(--neon-green)' }}>
-              {hum} <span style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>%</span>
+              {hum ?? '—'} <span style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>%</span>
             </div>
-            <div style={{ fontSize: '0.66rem', color: 'var(--neon-green)', marginTop: '4px' }}>RH Valid</div>
+            <div style={{ fontSize: '0.66rem', color: 'var(--neon-green)', marginTop: '4px' }}>{hum === null ? 'No reading' : 'RH Valid'}</div>
           </div>
 
           <div style={{ background: 'rgba(10,15,29,0.85)', border: '1px solid var(--border-subtle)', borderRadius: '6px', padding: '14px', textAlign: 'center' }}>
@@ -70,9 +80,9 @@ export const StationDiagnostics = () => {
               <i className="fa-solid fa-gauge text-cyan"></i> Pressure
             </div>
             <div style={{ fontFamily: 'var(--font-tactical)', fontSize: '1.75rem', fontWeight: 900, color: 'var(--text-primary)' }}>
-              {pres} <span style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>hPa</span>
+              {pres ?? '—'} <span style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>hPa</span>
             </div>
-            <div style={{ fontSize: '0.66rem', color: 'var(--text-muted)', marginTop: '4px' }}>Barometric Normal</div>
+            <div style={{ fontSize: '0.66rem', color: 'var(--text-muted)', marginTop: '4px' }}>{pres === null ? 'No reading' : 'Barometric Normal'}</div>
           </div>
 
           <div style={{ background: 'rgba(10,15,29,0.85)', border: '1px solid var(--border-subtle)', borderRadius: '6px', padding: '14px', textAlign: 'center' }}>
@@ -80,20 +90,20 @@ export const StationDiagnostics = () => {
               <i className="fa-solid fa-wind text-purple"></i> Wind Speed
             </div>
             <div style={{ fontFamily: 'var(--font-tactical)', fontSize: '1.75rem', fontWeight: 900, color: 'var(--neon-purple)' }}>
-              {wind} <span style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>km/h</span>
+              {wind ?? '—'} <span style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>km/h</span>
             </div>
-            <div style={{ fontSize: '0.66rem', color: 'var(--text-muted)', marginTop: '4px' }}>Sonic Anemometer</div>
+            <div style={{ fontSize: '0.66rem', color: 'var(--text-muted)', marginTop: '4px' }}>{wind === null ? 'Not reported' : 'Sonic Anemometer'}</div>
           </div>
 
           <div style={{ background: 'rgba(10,15,29,0.85)', border: '1px solid var(--border-subtle)', borderRadius: '6px', padding: '14px', textAlign: 'center' }}>
             <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '4px' }}>
               <i className="fa-solid fa-car-battery text-green"></i> Battery
             </div>
-            <div style={{ fontFamily: 'var(--font-tactical)', fontSize: '1.75rem', fontWeight: 900, color: station.battery < 11.8 ? 'var(--neon-crimson)' : 'var(--neon-green)' }}>
-              {batteryPct}% <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>({station.battery}V)</span>
+            <div style={{ fontFamily: 'var(--font-tactical)', fontSize: '1.75rem', fontWeight: 900, color: batteryLow ? 'var(--neon-crimson)' : 'var(--neon-green)' }}>
+              {batteryPct === null ? '—' : `${batteryPct}%`} <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>{battery === null ? '' : `(${battery}V)`}</span>
             </div>
-            <div style={{ fontSize: '0.66rem', color: station.battery < 11.8 ? 'var(--neon-crimson)' : 'var(--neon-green)', marginTop: '4px' }}>
-              {station.battery < 11.8 ? 'Low Voltage' : 'Normal Capacity'}
+            <div style={{ fontSize: '0.66rem', color: batteryLow ? 'var(--neon-crimson)' : 'var(--neon-green)', marginTop: '4px' }}>
+              {battery === null ? 'Not reported' : batteryLow ? 'Low Voltage' : 'Normal Capacity'}
             </div>
           </div>
         </div>
@@ -104,15 +114,15 @@ export const StationDiagnostics = () => {
           <div className="sim-box">
             <div className="sim-box-title">
               <span><i className="fa-solid fa-solar-panel text-green"></i> SOLAR & POWER</span>
-              <span className={`cyber-badge ${station.battery < 11.8 ? 'badge-critical' : 'badge-normal'}`}>
-                {station.battery}V
+              <span className={`cyber-badge ${batteryLow ? 'badge-critical' : 'badge-normal'}`}>
+                {battery === null ? '—' : `${battery}V`}
               </span>
             </div>
             <div style={{ fontSize: '0.74rem', color: 'var(--text-secondary)' }}>
-              <div>Solar PV Output: <strong style={{ color: 'var(--neon-green)' }}>14.2V (Float Active)</strong></div>
-              <div>Charging Current: <strong>1.85 A</strong></div>
-              <div>Subsystem Status: <strong style={{ color: station.battery < 11.8 ? 'var(--neon-crimson)' : 'var(--neon-green)' }}>
-                {station.battery < 11.8 ? 'LOW VOLTAGE' : 'NOMINAL'}
+              <div>Battery voltage: <strong style={{ color: batteryLow ? 'var(--neon-crimson)' : 'var(--neon-green)' }}>{battery === null ? 'Not reported' : `${battery}V`}</strong></div>
+              <div>Solar PV output / charging current: <strong>Not reported by this station</strong></div>
+              <div>Subsystem Status: <strong style={{ color: batteryLow ? 'var(--neon-crimson)' : 'var(--neon-green)' }}>
+                {battery === null ? 'UNKNOWN — NO BATTERY TELEMETRY' : batteryLow ? 'LOW VOLTAGE' : 'NOMINAL'}
               </strong></div>
             </div>
           </div>
@@ -121,12 +131,11 @@ export const StationDiagnostics = () => {
           <div className="sim-box">
             <div className="sim-box-title">
               <span><i className="fa-solid fa-tower-cell text-cyan"></i> NETWORK & BUS</span>
-              <span className="cyber-badge badge-normal">{station.signal} dBm</span>
+              <span className="cyber-badge badge-normal">{signal === null ? '—' : `${signal} dBm`}</span>
             </div>
             <div style={{ fontSize: '0.74rem', color: 'var(--text-secondary)' }}>
-              <div>Bearer: <strong>4G LTE Cat-M1</strong></div>
-              <div>Modbus CRC Error: <strong>0.00%</strong></div>
-              <div>Latency: <strong>42ms</strong></div>
+              <div>Signal strength: <strong>{signal === null ? 'Not reported' : `${signal} dBm`}</strong></div>
+              <div>Bearer / CRC errors / latency: <strong>Not reported by this station</strong></div>
             </div>
           </div>
 
@@ -134,12 +143,12 @@ export const StationDiagnostics = () => {
           <div className="sim-box">
             <div className="sim-box-title">
               <span><i className="fa-solid fa-memory text-purple"></i> GATEWAY MCU</span>
-              <span className="cyber-badge badge-offline">{station.firmware}</span>
+              <span className="cyber-badge badge-offline">{firmware ?? '—'}</span>
             </div>
             <div style={{ fontSize: '0.74rem', color: 'var(--text-secondary)' }}>
-              <div>Uptime: <strong>{Math.floor(station.uptime_s / 3600)}h {Math.floor((station.uptime_s % 3600) / 60)}m</strong></div>
-              <div>Flash Storage: <strong>84% Free (3.2 GB / 4 GB)</strong></div>
-              <div>Enclosure Humidity: <strong>18% RH</strong></div>
+              <div>Uptime: <strong>{uptimeS === null ? 'Not reported' : `${Math.floor(uptimeS / 3600)}h ${Math.floor((uptimeS % 3600) / 60)}m`}</strong></div>
+              <div>Firmware: <strong>{firmware ?? 'Not reported'}</strong></div>
+              <div>Flash storage / enclosure humidity: <strong>Not reported by this station</strong></div>
             </div>
           </div>
         </div>
