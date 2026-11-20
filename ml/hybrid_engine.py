@@ -123,6 +123,49 @@ def if_raw_score(forest, climatology, stats, row, history_rows):
     return float(forest.score_sample(vec))
 
 
+def score_validation_points(mamba, forest, clim, stats, full_rows,
+                            full_values, region_lo, region_hi, mean, std,
+                            window=24, stamps=None):
+    """Per-point raw scores on validation data (clean or injected).
+
+    full_rows/full_values: the whole series (rows/values); only points in
+    [region_lo, region_hi) are scored, but windows/history may reach back
+    before region_lo. Returns (if_raw, mamba_raw) arrays, one entry per
+    scored point (NaN where a score is unavailable). Mamba uses the
+    final-step prediction of the window ending at each point.
+
+    stamps (optional epoch seconds): when given, a Mamba score is only
+    produced when the window's points are consecutive hourly observations
+    (stamps[j] - stamps[j - window] == window * 3600). Station telemetry
+    can have gaps or sub-hourly rows, and a window straddling a gap is
+    not data the model was trained on; without stamps the caller asserts
+    the series is already hourly (the district-file case).
+    """
+    z = (full_values - mean) / std
+    n = region_hi - region_lo
+    if_raw = np.full(n, np.nan)
+    mamba_raw = np.full(n, np.nan)
+    for k in range(n):
+        j = region_lo + k
+        t, h, p = full_values[j]
+        if not (np.isfinite(t) and np.isfinite(h) and np.isfinite(p)):
+            continue
+        hist = full_rows[max(0, j - 12):j]
+        try:
+            if_raw[k] = if_raw_score(forest, clim, stats, full_rows[j], hist)
+        except Exception:
+            pass
+        if j >= window:
+            if stamps is not None and int(stamps[j]) - int(stamps[j - window]) != window * 3600:
+                continue
+            w = z[j - window:j]
+            if np.isfinite(w).all():
+                pred = mamba.predict_next(w) * std + mean
+                err = np.abs(full_values[j] - pred)
+                mamba_raw[k] = float(np.max(err / mamba.sigma_e))
+    return if_raw, mamba_raw
+
+
 # ---------------------------------------------------------------------------
 # Physical QC (hard violations)
 # ---------------------------------------------------------------------------

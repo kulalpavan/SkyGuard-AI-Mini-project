@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
 
-// Live, phase-by-phase view of a station Isolation Forest training job.
-// The backend records one stage at a time (see training_service.execute_training_job
-// and GET /stations/{id}/training-jobs/{job_id}/status); this component only
+// Live, phase-by-phase view of a station training job: the 8 Isolation
+// Forest phases followed by the 3 Mamba phases. The backend records one
+// stage at a time (see training_service.execute_training_job and GET
+// /stations/{id}/training-jobs/{job_id}/status); this component only
 // renders that state — done / in progress / pending — it never invents progress.
 // Shared by StationUpload (where training is triggered) and ModelGovernance
 // (where the job is watched), so the two views can never disagree.
@@ -16,6 +17,9 @@ export const TRAINING_STEPS = [
   { label: 'Model Evaluation', desc: 'Temporal holdout scoring & promotion gates' },
   { label: 'Model Registered', desc: 'Candidate model saved to the registry' },
   { label: 'Model Activated', desc: 'Ready for live real-time scoring' },
+  { label: 'Training Mamba', desc: 'Fitting the selective state-space temporal predictor on station history' },
+  { label: 'Calibrating Mamba', desc: 'Error scale, ECDFs and hybrid weights from validation' },
+  { label: 'Mamba Registered', desc: 'Temporal model saved to the registry for live hybrid scoring' },
 ];
 
 export function parseCompletedStages(value) {
@@ -78,7 +82,15 @@ export const TrainingProgress = ({ job, stationId, startedAt }) => {
     ? { color: 'var(--neon-crimson)', border: 'var(--neon-crimson)', bg: 'rgba(255,0,85,0.08)' }
     : { color: 'var(--neon-cyan)', border: 'var(--neon-cyan)', bg: 'rgba(5,8,17,0.9)' };
 
-  const statusLabel = status === 'COMPLETED' ? 'MODEL ACTIVATED'
+  // Per-engine outcome, derived from the completed stages alone — no new
+  // backend field needed. A job can fail on one engine while the other
+  // finished (Udupi: IF activation fails the gate, Mamba still registers).
+  const ifActivated = completedSet.has('Model Activated');
+  const ifRegistered = completedSet.has('Model Registered');
+  const mambaRegistered = completedSet.has('Mamba Registered');
+
+  const statusLabel = status === 'COMPLETED'
+    ? (mambaRegistered ? 'MODELS TRAINED' : 'MODEL ACTIVATED')
     : status === 'FAILED' ? 'TRAINING FAILED'
     : status === 'RUNNING' ? 'TRAINING IN PROGRESS'
     : String(status || 'UNKNOWN');
@@ -171,7 +183,9 @@ export const TrainingProgress = ({ job, stationId, startedAt }) => {
       {/* Final outcome */}
       {status === 'COMPLETED' && (
         <div style={{ marginTop: '12px', paddingTop: '10px', borderTop: '1px solid var(--border-subtle)', fontSize: '0.78rem', color: 'var(--neon-green)', fontFamily: 'var(--font-mono)' }}>
-          <i className="fa-solid fa-circle-check"></i> Model activated and ready for live scoring
+          <i className="fa-solid fa-circle-check"></i> {mambaRegistered
+            ? 'Isolation Forest activated and Mamba registered — ready for live hybrid scoring'
+            : 'Model activated and ready for live scoring'}
           {elapsedMs != null ? ` — finished in ${formatDuration(elapsedMs)}` : ''}.
         </div>
       )}
@@ -179,11 +193,17 @@ export const TrainingProgress = ({ job, stationId, startedAt }) => {
         <div style={{ marginTop: '12px', paddingTop: '10px', borderTop: '1px solid var(--border-subtle)', fontSize: '0.78rem', color: 'var(--neon-crimson)', lineHeight: 1.5 }}>
           <i className="fa-solid fa-triangle-exclamation"></i>{' '}
           <strong>Training stopped{activeIndex >= 0 ? ` at step ${activeIndex + 1} of ${TRAINING_STEPS.length} (${TRAINING_STEPS[activeIndex]?.label})` : ''}.</strong>
+          <div style={{ fontFamily: 'var(--font-mono)', marginTop: '6px', fontSize: '0.72rem', lineHeight: 1.6 }}>
+            <div>Isolation Forest: {ifActivated ? 'activated' : ifRegistered ? 'trained, activation failed' : 'did not finish'}</div>
+            <div>Mamba: {mambaRegistered ? 'registered' : 'did not finish'}</div>
+          </div>
           <div style={{ fontFamily: 'var(--font-mono)', marginTop: '4px', wordBreak: 'break-word' }}>
             {job.error_message || 'No reason recorded by the backend.'}
           </div>
           <div style={{ color: 'var(--text-secondary)', marginTop: '6px', fontSize: '0.72rem' }}>
-            The model was not changed — the previous active model (if any) is still in place. Fix the cause and train again.
+            {ifActivated ? 'The Isolation Forest is active. ' : 'The previous active model (if any) is still in place. '}
+            {mambaRegistered ? 'The Mamba model was registered and is scoring. ' : 'No Mamba model was registered. '}
+            Fix the cause and train again.
           </div>
         </div>
       )}

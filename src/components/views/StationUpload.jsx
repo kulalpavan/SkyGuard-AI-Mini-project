@@ -335,9 +335,9 @@ export const StationUpload = () => {
 
           // Always normalize COMPLETED state so stage never reads stale 'Data Ingested'
           const resolvedStage = jobStatus === "COMPLETED"
-            ? "Model Activated"
+            ? "Mamba Registered"
             : statusRes.current_stage;
-          const resolvedCompleted = jobStatus === "COMPLETED" && completed.length < 8
+          const resolvedCompleted = jobStatus === "COMPLETED" && completed.length < TRAINING_STEPS.length
             ? TRAINING_STEPS.map(s => s.label)
             : completed;
 

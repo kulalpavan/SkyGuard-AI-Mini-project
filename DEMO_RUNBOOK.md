@@ -46,7 +46,13 @@ DEMO_MODE=true WEATHER_POLL_ENABLED=false ../venv/bin/python -m uvicorn backend.
   Never use demo mode for a real deployment.
 - `WEATHER_POLL_ENABLED=false` — disables the Open-Meteo poller so the demo
   needs no internet and no live weather feed. The ESP32 ingest path used
-  below does not depend on it.
+  below does not depend on it. **For detection to run on live Open-Meteo
+  data, start the backend with `WEATHER_POLL_ENABLED=true` (the default
+  when the variable is unset): the poller fetches current weather every
+  20 s and the observations land in the same telemetry table the models
+  train on — so training (M2) trains on the detection population, not on
+  ESP32-only data. The demo keeps it off so the demo data stays
+  deterministic.**
 - Leave this terminal running. Verify in a second terminal:
 
 ```bash
@@ -358,7 +364,7 @@ so the IF training job has ≥720 observations over ≥14 days and a live
 frame has a 24 h Mamba window. **This is SIMULATED demo history** —
 real district values, timestamps shifted to the present. Say so.
 
-### M2. Train the Isolation Forest for AWS-02 (real training job)
+### M2. Train the models for AWS-02 (one job: Isolation Forest + Mamba)
 
 ```bash
 # Get a token (same read -s prompt as §5; password is the one in the
@@ -373,34 +379,53 @@ curl -s -X POST http://127.0.0.1:8000/api/v1/stations/AWS-02/train \
 # {"success": true, "job_id": 1, "station_id": "AWS-02", ...}
 ```
 
+One Train click trains **both** models from the station's own stored
+telemetry history — the same history the Isolation Forest job trains
+on. That history is what detection runs on: the Open-Meteo poller
+writes its observations into the same telemetry table (see the poller
+note in §1), so when the poller is on, the models train on live
+Open-Meteo data, not on ESP32-only data. The ESP32 only shows how
+data is transmitted (simulator → ESP32 → backend); detection runs on
+the Open-Meteo observations.
+
 The training runs in the background. Measured on the demo machine with
-2,617 backfilled rows: first training **~3–4 s** end to end, retraining
-with an incumbent model **~4 s** (a retrain used to take ~28 s because
-the incumbent-agreement check re-loaded the model artifact and ran SHAP
-for every holdout row; it now loads the artifact once and scores
-directly — same decisions, verified identical metrics). Per-phase
-breakdown of a retrain: history fetch 0.03 s, climatology + scrubbing
+2,617 backfilled rows (AWS-02): the Isolation Forest part takes **~3–4 s**
+end to end (retraining with an incumbent model **~4 s** — a retrain used
+to take ~28 s because the incumbent-agreement check re-loaded the model
+artifact and ran SHAP for every holdout row; it now loads the artifact
+once and scores directly — same decisions, verified identical metrics),
+then Mamba trains for **~45 s** (15 epochs over ~1,500 train windows),
+so the whole job finishes in **~53 s**. Per-phase breakdown of the IF
+part of a retrain: history fetch 0.03 s, climatology + scrubbing
 1.8 s, feature generation 0.6 s, forest fit 0.5 s, evaluation 0.4 s,
-registration + activation 0.1 s. Udupi fails honestly in ~3–4 s (see
-M2b). To check the job from the terminal instead of the UI, poll its
-status until it completes:
+registration + activation 0.1 s. Udupi takes **~4 min** (3m45s first
+run, 4m20s retrain — its history is 17,617 rows, because the demo seed
+`test_weather.csv` contributes 15,000 flat hourly rows on top of the
+2,617 backfilled ones, so Mamba trains on ~16.5k hourly points /
+~9.8k windows); it fails honestly on the IF gate (see M2b) but its
+Mamba model still registers. To check the job
+from the terminal instead of the UI, poll its status until it completes:
 
 ```bash
 curl -s -H "Authorization: Bearer $TOKEN" \
   "http://127.0.0.1:8000/api/v1/stations/AWS-02/training-jobs/1/status"
 # {"success": true, "job_id": 1, "station_id": "AWS-02",
-#  "status": "COMPLETED", "current_stage": "Model Activated",
+#  "status": "COMPLETED", "current_stage": "Mamba Registered",
 #  "progress": 100.0, "error_message": null}
 ```
 
 (Replace `1` with the `job_id` from the train response.) If the
-status is `FAILED`, read `error_message` — on this data it completes.
+status is `FAILED`, read `error_message` — it names the engine that
+failed (e.g. `Isolation Forest: ...; Mamba: ...`). A station needs at
+least 720 hourly observations before Mamba can train; below that the
+job fails honestly with `MAMBA_HISTORY_INSUFFICIENT` instead of
+training on too little data.
 
 ### M2b. What the audience sees while training runs (live progress)
 
 Do this from the UI, not curl: **Station Training Studio → select the
 station → Train Model**. A "TRAINING PIPELINE" card appears under the
-upload box and shows the eight phases with a live state each — DONE
+upload box and shows the eleven phases with a live state each — DONE
 (green tick), IN PROGRESS (spinning, cyan border on the current phase),
 PENDING (grey) — plus a progress bar, elapsed time, and the job number.
 The same card is visible in **Model Governance** for the selected
@@ -409,30 +434,48 @@ status every ~0.6 s; the phases advance as the backend records them:
 
 1. Data Ingested → 2. Data Validated → 3. Data Preprocessed →
 4. Features Generated → 5. Training Isolation Forest →
-6. Model Evaluation → 7. Model Registered → 8. Model Activated.
+6. Model Evaluation → 7. Model Registered → 8. Model Activated →
+9. Training Mamba → 10. Calibrating Mamba → 11. Mamba Registered.
 
 The card stays on screen when the job finishes: COMPLETED reads
-"MODEL ACTIVATED · 8/8 STEPS · 100% · Total ~6 s" (the ~6 s includes
-the UI round-trip; the service itself takes ~4 s). Clicking Train
+"MODELS TRAINED · 11/11 STEPS · 100% · Total ~53 s" (the ~53 s is
+~4 s for the Isolation Forest plus ~45 s for Mamba on AWS-02's 2,617
+rows; the UI round-trip adds a second or so). Clicking Train
 while a job is already running does not start a second job — the
 backend allows one running job per station and the UI attaches to the
 running one and shows its progress instead.
 
 **The honest failure (show it — it is a feature, not a bug).**
-Training AWS-01 (Udupi) ends FAILED in ~5 s: the card turns red at
-step 8, "TRAINING FAILED · 7/8 STEPS · 87.5%", and prints the real
-reason: `Model promotion gates failed: {'holdout_anomaly_rate': False,
-'incumbent_agreement': True, 'known_fault_validation': True,
-'readiness': True}` — Udupi's holdout anomaly rate is 0.153 against the
-0.15 gate, so the model is registered as a CANDIDATE but never
-activated. Say so on stage: the gate did its job. The previous active
+Training AWS-01 (Udupi) takes ~4 min and ends FAILED: the card turns
+red at the end, "TRAINING FAILED · 10/11 STEPS · 90.9% · Total 4m 20s",
+and prints the real reason: `Isolation Forest: Model promotion gates
+failed: {'holdout_anomaly_rate': False, 'incumbent_agreement': True,
+'known_fault_validation': True, 'readiness': True}` — on the live demo
+database Udupi's holdout anomaly rate is 1.0 against the 0.15 gate (the
+demo seed `test_weather.csv` contributes 15,000 flat hourly rows, so the
+forest fits an almost-constant region and the varying backfilled rows in
+the holdout all score anomalous; the 0.153 figure in earlier notes was
+the fixture-only evaluation on the 2,617 district rows alone), so the
+model is registered as a CANDIDATE but never activated. The card also
+shows the per-engine outcome: Isolation Forest trained but not
+activated, **Mamba registered** — the gate failure does not block Mamba
+training. Say so on stage: the gate did its job. The previous active
 model (if any) stays in place; nothing is silently bypassed.
 
 If the server restarts mid-training, the interrupted job is marked
 FAILED on startup ("Training was interrupted by a server restart")
 instead of spinning forever — the card shows that reason too.
 
-### M3. Register the Mamba model for AWS-02
+### M3. Register the Mamba model for AWS-02 (manual alternative — normally done by M2)
+
+Mamba is now trained by the Train button in M2 — the command below is
+only the manual alternative (e.g. to re-register with different
+epochs, or to train from a district file instead of the station's own
+telemetry). It trains the same way (15 epochs, ~22 s), calibrates the
+hybrid against the ACTIVE IF model from M2, and registers it as a
+CANDIDATE Mamba artifact. The IF model stays the single ACTIVE row.
+Do not run it after M2 on the same station unless you want a second
+Mamba version registered — the pipeline always uses the latest one.
 
 ```bash
 cd ~/workspace/skyguard-ai/upstream
@@ -446,11 +489,6 @@ DEMO_MODE=true ../venv/bin/python scripts/register_mamba.py \
 # test temperature_C: Mamba MAE=0.229 vs persistence MAE=0.244
 # registered AWS-02_MAMBA_v1_0 -> ml/models/AWS-02/AWS-02_MAMBA_v1_0.json (22s)
 ```
-
-This trains the Mamba model on the district data (15 epochs, ~22 s),
-calibrates the hybrid against the ACTIVE IF model from M2, and
-registers it as a CANDIDATE Mamba artifact. The IF model stays the
-single ACTIVE row.
 
 ### M4. Live frames with Mamba + hybrid scores
 

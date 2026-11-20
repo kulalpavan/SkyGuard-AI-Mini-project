@@ -33,8 +33,9 @@ from ml.mamba_engine import (MambaEncoder, load_district_series,
                              standardise, DISTRICT_ELEVATION_M,
                              consecutive_windows)
 from ml.hybrid_engine import (HybridScorer, train_if_forest,
-                              if_raw_score, rows_from_series)
-from evaluate_e1_e4 import inject, inject_pair
+                              if_raw_score, rows_from_series,
+                              score_validation_points)
+from ml.fault_injection import inject, inject_pair
 from backend.app.services.mamba_service import mamba_service
 from backend.app.services.model_storage import model_storage_service
 from backend.app.storage.database import get_active_model_record
@@ -57,39 +58,6 @@ def load_active_if(station_id):
     if clim is None or stats is None:
         return None
     return forest, clim, stats
-
-
-def score_val_points(mamba, forest, clim, stats, full_rows, full_values,
-                     region_lo, region_hi, mean, std):
-    """Per-point raw scores on validation data (clean or injected).
-
-    full_rows/full_values: the whole series (rows/values); only points in
-    [region_lo, region_hi) are scored, but windows/history may reach back
-    before region_lo. Returns (if_raw, mamba_raw) arrays, one entry per
-    scored point (NaN where a score is unavailable). Mamba uses the
-    final-step prediction of the window ending at each point.
-    """
-    z = (full_values - mean) / std
-    n = region_hi - region_lo
-    if_raw = np.full(n, np.nan)
-    mamba_raw = np.full(n, np.nan)
-    for k in range(n):
-        j = region_lo + k
-        t, h, p = full_values[j]
-        if not (np.isfinite(t) and np.isfinite(h) and np.isfinite(p)):
-            continue
-        hist = full_rows[max(0, j - 12):j]
-        try:
-            if_raw[k] = if_raw_score(forest, clim, stats, full_rows[j], hist)
-        except Exception:
-            pass
-        if j >= WINDOW:
-            w = z[j - WINDOW:j]
-            if np.isfinite(w).all():
-                pred = mamba.predict_next(w) * std + mean
-                err = np.abs(full_values[j] - pred)
-                mamba_raw[k] = float(np.max(err / mamba.sigma_e))
-    return if_raw, mamba_raw
 
 
 def register_station(station, district, data_dir, version="v1.0",
@@ -139,7 +107,7 @@ def register_station(station, district, data_dir, version="v1.0",
             rows[:n_train], elevation_m=DISTRICT_ELEVATION_M[district])
 
     # --- Validation calibration (clean) ---
-    if_raw, mamba_raw = score_val_points(
+    if_raw, mamba_raw = score_validation_points(
         mamba, forest, clim, stats, rows, values, lo_va, hi_va, mean, std)
     ok_if = if_raw[np.isfinite(if_raw)]
     ok_m = mamba_raw[np.isfinite(mamba_raw)]
@@ -160,7 +128,7 @@ def register_station(station, district, data_dir, version="v1.0",
     inj_full_values = values.copy()
     inj_full_values[lo_va:hi_va] = inj_vals
     inj_full_rows = rows[:lo_va] + inj_rows + rows[hi_va:]
-    if_inj, m_inj = score_val_points(
+    if_inj, m_inj = score_validation_points(
         mamba, forest, clim, stats, inj_full_rows, inj_full_values,
         lo_va, hi_va, mean, std)
     vi = np.isfinite(if_inj) & np.isfinite(m_inj)

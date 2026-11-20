@@ -97,14 +97,18 @@ def get_training_job_status(
     else:
         completed = []
 
+    # The training job has 11 phases: the 8 Isolation Forest phases
+    # followed by 3 Mamba phases (Training Mamba, Calibrating Mamba,
+    # Mamba Registered). Jobs completed before Mamba was added have 8.
+    total_stages = 11
     if job.get("status") == "COMPLETED":
-        current_stage = "Model Activated"
-        if "Model Activated" not in completed:
+        current_stage = "Mamba Registered" if "Mamba Registered" in completed else "Model Activated"
+        if "Model Activated" not in completed and "Mamba Registered" not in completed:
             completed.append("Model Activated")
         progress = 100.0
     else:
         current_stage = str(job.get("current_stage") or "Unknown")
-        progress = round((len(completed) / 8.0) * 100.0, 1)
+        progress = round((len(completed) / float(total_stages)) * 100.0, 1)
 
     return {
         "success": True,

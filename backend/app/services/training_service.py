@@ -11,6 +11,7 @@ from backend.app.storage.database import (
     update_training_job_stage, get_active_model_record, list_station_models,
 )
 from backend.app.services.model_storage import model_storage_service
+from backend.app.services.mamba_training import train_mamba_from_station_history
 from ml.feature_engine import feature_engine, instant, readiness, valid_core
 from ml.climatology_engine import climatology_engine
 from ml.station_adaptive_pipeline import IsolationForest, StationAdaptiveMLPipeline
@@ -75,6 +76,12 @@ class StationAdaptiveTrainingService:
         def stage(name):
             completed.append(name)
             update_training_job_stage(job_id, name, completed)
+        if_error = None
+        mamba_error = None
+        rows = []
+        if_trained = False
+        forest_bundle = None
+        elevation_m = 0.0
         try:
             rows, raw_count = self.history(station_id)
             eligible = readiness(rows)
@@ -84,6 +91,7 @@ class StationAdaptiveTrainingService:
                 cur = conn.cursor()
                 cur.execute('SELECT * FROM stations WHERE station_id = ?', (station_id,))
                 station = cur.fetchone()
+            elevation_m = float(station['elevation'] or 0)
             stage('Data Ingested')
             stage('Data Validated')
             split = int(len(rows) * .8)
@@ -149,12 +157,47 @@ class StationAdaptiveTrainingService:
                     (station_id,card['model_id'],target_version,'IsolationForest',path,json.dumps(feature_engine.feature_names),len(rows),
                      forest.threshold,rate,artifact['sha256'],'CANDIDATE',metrics['evaluated_at'],metrics['evaluated_at'],json.dumps(metrics),metrics['evaluated_at']))
             stage('Model Registered')
-            self.activate(station_id, target_version)
-            stage('Model Activated')
-            update_training_job(job_id, 'COMPLETED', rows_used=len(rows), feature_count=12, current_stage='Model Activated', completed_stages=completed)
+            if_trained = True
+            forest_bundle = (forest, climate, stats)
+            try:
+                self.activate(station_id, target_version)
+                stage('Model Activated')
+            except Exception as error:
+                # A promotion-gate failure must not block Mamba training:
+                # the Isolation Forest is still registered as CANDIDATE
+                # and the temporal model trains against it (Udupi's
+                # holdout rate 0.153 vs the 0.15 gate is the known case).
+                if_error = str(error)
+                logging.getLogger(__name__).warning(
+                    "Training job %s: IF activation failed: %s", job_id, error)
         except Exception as error:
             logging.getLogger(__name__).exception("Training job %s failed", job_id)
-            update_training_job(job_id, 'FAILED', error_message=str(error), current_stage='Validation failed', completed_stages=completed)
+            if_error = str(error)
+        # --- Mamba: same job, same history, own phases. Runs whenever the
+        # Isolation Forest trained (even when its activation failed); it is
+        # skipped only when the IF training itself failed, since there is
+        # then no usable history to train on.
+        if if_trained:
+            try:
+                train_mamba_from_station_history(
+                    station_id, rows, elevation_m,
+                    f'{target_version}-mamba',
+                    forest_bundle=forest_bundle, stage=stage)
+            except Exception as error:
+                logging.getLogger(__name__).exception(
+                    "Training job %s: Mamba training failed", job_id)
+                mamba_error = str(error)
+        if if_error is None and mamba_error is None:
+            update_training_job(job_id, 'COMPLETED', rows_used=len(rows), feature_count=12, current_stage='Mamba Registered', completed_stages=completed)
+        else:
+            parts = []
+            if if_error:
+                parts.append(f'Isolation Forest: {if_error}')
+            if mamba_error:
+                parts.append(f'Mamba: {mamba_error}')
+            update_training_job(job_id, 'FAILED', error_message='; '.join(parts),
+                                current_stage=completed[-1] if completed else 'Validation failed',
+                                completed_stages=completed)
 
     def _incumbent_anomaly_flags(self, incumbent_record, holdout, rows, split):
         """Score holdout rows against the incumbent model, artifact loaded once.

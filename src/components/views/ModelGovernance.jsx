@@ -3,7 +3,7 @@ import { useAuth } from '../../context/AuthContext';
 import { useWeather } from '../../context/WeatherContext';
 import { apiClient } from '../../utils/apiClient';
 import { tacticalAudio } from '../../utils/audio';
-import { TrainingProgress, parseCompletedStages } from '../TrainingProgress';
+import { TrainingProgress, TRAINING_STEPS, parseCompletedStages } from '../TrainingProgress';
 
 export const ModelGovernance = () => {
   const { role, assignedStationId } = useAuth();
@@ -59,7 +59,7 @@ export const ModelGovernance = () => {
         status: j.status,
         current_stage: j.current_stage,
         completed_stages: completed,
-        progress: j.status === 'COMPLETED' ? 100 : Math.round((completed.length / 8) * 100),
+        progress: j.status === 'COMPLETED' ? 100 : Math.round((completed.length / TRAINING_STEPS.length) * 100),
         error_message: j.error_message,
         started_at: j.started_at,
         completed_at: j.completed_at,
