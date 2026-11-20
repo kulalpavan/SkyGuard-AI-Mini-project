@@ -12,14 +12,37 @@ from backend.app.api.v1.auth import router as auth_router
 from backend.app.api.v1.stations import router as stations_router
 from backend.app.api.v1.telemetry import router as telemetry_router
 from backend.app.api.v1.models import router as models_router
+from backend.app.api.v1.drift import router as drift_router
 from backend.app.api.v1.evidence import router as evidence_router
 from backend.app.api.v1.faults import router as faults_router
 from backend.app.api.v1.incidents import router as incidents_router
 from backend.app.api.v1.maintenance import router as maintenance_router
 from backend.app.services.weather_service import weather_service
+from backend.app.services import drift_service
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("skyguard.backend")
+
+async def _drift_nightly_loop():
+    """Nightly drift job (spec §21.5, §28.5): compute drift for every
+    station, store it, and — outside DEMO_MODE — queue retraining
+    candidates / open DATA_QUALITY incidents on MODERATE/HIGH. In
+    DEMO_MODE the job only observes (§22.2: automated triggers are
+    disabled in demo mode); the admin's on-demand POST /drift/compute
+    still performs the actions, because a human explicitly asked.
+    The job never blocks the poller: one station's failure is logged
+    and the loop continues, and the compute runs in a worker thread.
+    """
+    await asyncio.sleep(300)  # let the server finish starting up
+    while True:
+        try:
+            outcomes = await asyncio.to_thread(
+                drift_service.compute_all_stations,
+                perform_actions=not DEMO_MODE)
+            logger.info("Nightly drift computation finished: %s", outcomes)
+        except Exception as error:  # noqa: BLE001 - the loop must survive
+            logger.exception("Nightly drift computation failed: %s", error)
+        await asyncio.sleep(24 * 3600)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -34,20 +57,26 @@ async def lifespan(app: FastAPI):
     
     # Start Background Weather Poller
     weather_task = asyncio.create_task(weather_service.poll_loop()) if os.getenv("WEATHER_POLL_ENABLED", "true").lower() == "true" else None
-    
+
+    # Nightly model-drift job (spec §21.5): first run 5 minutes after
+    # startup, then once a day. See _drift_nightly_loop for the
+    # DEMO_MODE rule (observe only in demo mode).
+    drift_task = asyncio.create_task(_drift_nightly_loop())
+
     yield
     # Shutdown
     logger.info("SkyGuard-AI Backend service shutting down.")
     weather_service.stop()
-    try:
-        if weather_task:
-            weather_task.cancel()
-            try:
-                await weather_task
-            except asyncio.CancelledError:
-                pass
-    except asyncio.TimeoutError:
-        pass
+    for task in (weather_task, drift_task):
+        if not task:
+            continue
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        except asyncio.TimeoutError:
+            pass
 
 app = FastAPI(
     title="SkyGuard-AI Tactical Backend Service",
@@ -72,6 +101,7 @@ app.add_middleware(
 app.include_router(auth_router, prefix="/api/v1")
 app.include_router(telemetry_router, prefix="/api/v1")
 app.include_router(models_router, prefix="/api/v1")
+app.include_router(drift_router, prefix="/api/v1")
 app.include_router(evidence_router, prefix="/api/v1")
 app.include_router(faults_router, prefix="/api/v1")
 app.include_router(incidents_router, prefix="/api/v1")

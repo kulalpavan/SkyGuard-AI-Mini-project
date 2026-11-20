@@ -602,6 +602,62 @@ open the incident:
    See `ml/MAMBA_README.md` for the full numbers, including
    Belagavi, where Mamba is worse than persistence.
 
+### M6. Model drift tracking — show the model going stale (2 minutes)
+
+Drift answers "does this station's model still match its recent
+weather?" It is measured in **residual space** (how far recent
+readings sit from what the model learned), not raw values — so a
+change of season alone never triggers it. Full design, thresholds and
+reasoning: `ml/DRIFT_README.md`.
+
+**Where to look.** **Model Governance → select a station → MODEL
+DRIFT panel**: a severity badge in plain words, a per-metric table
+with thresholds, 90-day sparklines of PSI and residual mean, and
+"Check Drift Now" / "Queue Retraining" buttons (admin only). **Command
+Center** shows a `DRIFT: HIGH/MODERATE/LOW/NONE` chip on each station
+row. Thresholds: PSI < 0.10 stable · 0.10–0.25 moderate · > 0.25
+significant; residual mean shift < 0.3 ok · 0.3–0.7 warn · > 0.7
+alert; anomaly rate > 3× the training contamination alerts.
+
+**The demo station (AWS-03, HIGH on purpose).** On a wiped database
+AWS-03 does not exist — build it after §3/M1/M2 with the script that
+also trains AWS-02:
+
+```bash
+cd ~/workspace/skyguard-ai/upstream
+DEMO_MODE=true ../venv/bin/python ~/workspace/skyguard-ai/verification/make_shifted_station.py
+# station AWS-03 created; backfilled 2617 rows (last 504 h shifted +2.0 C)
+# AWS-03: training job FAILED (holdout 35.5% > 15% — honest gate failure,
+#   Mamba still registered); AWS-02: COMPLETED; drift computed for all three
+```
+
+AWS-03 is the real Dakshina Kannada series with a sustained +2.0 °C
+offset on the last 21 days, so the recent window genuinely sits ~5σ
+away from what its model learned. Open **Model Governance → AWS-03**:
+both models read HIGH — Isolation Forest PSI 7.12, residual mean shift
+2.58; Mamba PSI 0.78, error ratio 1.49 — with a red banner saying a
+DATA_QUALITY incident was opened and a retraining candidate queued.
+Open **Incident Triage**: the `drift:MODEL_DRIFT` incident is there.
+Say on stage: "Drift never retrains, activates or deactivates anything
+by itself — it queues a candidate and opens an incident, and a human
+decides."
+
+**AWS-01 and AWS-02 are HIGH too — and that is real, not a bug.**
+Their recent 14 days contain the genuine monsoon-break dry spell of
+9–13 Sep (humidity ~83% against a ~90% baseline): IF PSI ~2.4–2.5,
+residual mean shift ~1.1, driven by humidity. If the audience asks why
+two healthy stations show HIGH, show the per-parameter breakdown in
+the panel (humidity moved, temperature and pressure did not) and say:
+"Drift means investigate, not the sensor is broken — this one is
+regional weather, and the panel shows you which parameter moved so
+you can tell the difference."
+
+**To recompute live on stage:** Model Governance → "Check Drift Now"
+(admin). It takes a few seconds and re-renders the panel. A nightly
+job also computes drift for every station (first run 5 min after the
+backend starts, then daily); in DEMO_MODE it only records — it never
+queues candidates or opens incidents by itself.
+
 ## Known limitations (do not present these as working)
 
 - **No trained Isolation Forest model exists for these stations yet

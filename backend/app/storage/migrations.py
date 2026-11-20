@@ -39,3 +39,53 @@ def migrate(conn):
         cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS one_running_training ON training_jobs(station_id) WHERE status = 'RUNNING'")
         cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS one_active_model ON model_registry(station_id) WHERE status = 'ACTIVE'")
         cur.execute("INSERT INTO schema_migrations(version) VALUES (3)")
+    if 4 not in versions:
+        # Drift tracking (§21): extend the seed-era drift_metrics /
+        # retraining_candidates tables to the full §24.3 shape. The two
+        # tables were created twice in init_db with different columns
+        # (SQLite branch vs extended tables), so add whatever is missing
+        # rather than assuming one shape. Existing rows and the legacy
+        # record_drift_metrics()/register_retraining_candidate() writers
+        # keep working: the new columns are nullable with defaults.
+        def _add_column(table, column, ddl):
+            if conn.is_postgres:
+                cur.execute(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {ddl}")
+            else:
+                try:
+                    cur.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
+                except Exception:
+                    pass  # column already exists
+        for column, ddl in (
+            ("model_version", "TEXT"),
+            ("model_type", "TEXT"),
+            ("window_days", "INTEGER"),
+            ("computed_at", "TEXT"),
+            ("psi_temperature", "REAL"),
+            ("psi_humidity", "REAL"),
+            ("psi_pressure", "REAL"),
+            ("residual_mean_shift", "REAL"),
+            ("residual_variance_ratio", "REAL"),
+            ("anomaly_rate_reference", "REAL"),
+            ("ks_statistic", "REAL"),
+            ("feature_availability", "REAL"),
+            ("severity", "TEXT"),
+            ("triggered_candidate", "INTEGER DEFAULT 0"),
+            ("metrics_json", "TEXT NOT NULL DEFAULT '{}'"),
+            ("is_partial", "INTEGER DEFAULT 0"),
+            ("score_mean", "REAL"),
+            ("score_std", "REAL"),
+        ):
+            _add_column("drift_metrics", column, ddl)
+        for column, ddl in (
+            ("trigger_reason", "TEXT"),
+            ("priority", "TEXT DEFAULT 'LOW'"),
+            ("status", "TEXT DEFAULT 'QUEUED'"),
+            ("gate_status", "TEXT DEFAULT 'PENDING'"),
+            ("gate_results", "TEXT NOT NULL DEFAULT '{}'"),
+            ("artifact_hash", "TEXT"),
+        ):
+            _add_column("retraining_candidates", column, ddl)
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_drift_station_time ON drift_metrics(station_id, computed_at)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_drift_station_model ON drift_metrics(station_id, model_type, computed_at)")
+        cur.execute("CREATE INDEX IF NOT EXISTS idx_candidates_station_status ON retraining_candidates(station_id, status)")
+        cur.execute("INSERT INTO schema_migrations(version) VALUES (4)")

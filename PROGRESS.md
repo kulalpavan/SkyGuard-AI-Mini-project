@@ -669,7 +669,13 @@ Theme: Cyberpunk dark mode with neon accents.
 - Export.jsx shows a fake hardcoded SHA256 hash string
 
 ### Model Drift Monitoring (Medium Impact)
-- Model drift tracking is mentioned in seed data (INITIAL_MODEL_DRIFT) but no drift detection logic is implemented
+- Implemented 2026-11-20 (spec §21): residual-space drift per station
+  and model type (PSI, residual mean shift/variance, anomaly rate, KS,
+  feature availability, Mamba error ratio), stored in `drift_metrics`,
+  API + Model Governance panel + Command Center chip, nightly job,
+  MODERATE queues a retraining candidate, HIGH also opens a
+  DATA_QUALITY incident. No auto-retraining and no confidence
+  reduction (deliberate — drift observes, it never retunes detection).
 
 ### No Automated Retraining Trigger (Medium for Production)
 - Model retraining is manual — no scheduled or drift-triggered automatic retraining
@@ -734,7 +740,7 @@ Theme: Cyberpunk dark mode with neon accents.
 | Edge sync | N/A | PARTIAL | NO | Simulated only |
 | Data export | N/A | YES | YES | JSON download |
 | Auth audit log | YES | N/A | YES | DB-level only |
-| Model drift tracking | NO | NO | NO | Not implemented |
+| Model drift tracking | YES | YES | YES | Implemented 2026-11-20 (§21 metrics, drift_metrics, API, Governance panel, nightly job) |
 | Auto-retraining | NO | NO | NO | Manual only |
 | TimescaleDB hypertables | NO | N/A | NO | Plain table |
 

@@ -4,6 +4,7 @@ import { useWeather } from '../../context/WeatherContext';
 import { apiClient } from '../../utils/apiClient';
 import { tacticalAudio } from '../../utils/audio';
 import { TrainingProgress, TRAINING_STEPS, parseCompletedStages } from '../TrainingProgress';
+import { DriftPanel } from '../DriftPanel';
 
 export const ModelGovernance = () => {
   const { role, assignedStationId } = useAuth();
@@ -345,6 +346,9 @@ export const ModelGovernance = () => {
           )}
         </div>
       </div>
+
+      {/* Model drift — how far recent weather has moved from what the model learned */}
+      <DriftPanel stationId={selectedStationId} />
 
       {/* Model Version Ledger & Rollback Table */}
       <div className="cyber-card" style={{ marginTop: '16px' }}>

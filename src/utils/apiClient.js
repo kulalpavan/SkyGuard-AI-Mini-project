@@ -343,6 +343,31 @@ class ApiClient {
     return await this.request(`/stations/${stationId}/models`);
   }
 
+  // -------------------------------------------------------------------------
+  // Model Drift Monitoring Endpoints (§21)
+  // -------------------------------------------------------------------------
+
+  async getStationDrift(stationId, days = 90) {
+    return await this.request(`/stations/${stationId}/drift?days=${days}`);
+  }
+
+  async getLatestDrift(stationId) {
+    return await this.request(`/stations/${stationId}/drift/latest`);
+  }
+
+  async computeStationDrift(stationId) {
+    return await this.request(`/stations/${stationId}/drift/compute`, {
+      method: "POST"
+    });
+  }
+
+  async queueDriftRetraining(stationId, modelVersion, priority = "LOW") {
+    return await this.request(`/stations/${stationId}/drift/queue-retraining`, {
+      method: "POST",
+      body: JSON.stringify({ model_version: modelVersion, priority })
+    });
+  }
+
   async getStationActiveModel(stationId) {
     return await this.request(`/stations/${stationId}/models/active`);
   }

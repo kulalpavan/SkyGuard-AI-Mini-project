@@ -2,7 +2,17 @@ import React from 'react';
 import { useWeather } from '../../context/WeatherContext';
 import { tacticalAudio } from '../../utils/audio';
 import { displayCode } from '../../utils/display';
+import { apiClient } from '../../utils/apiClient';
 import { decisionFor } from '../DecisionBanner';
+
+const DRIFT_BADGE = {
+  NONE: 'badge-normal',
+  LOW: 'badge-offline',
+  MODERATE: 'badge-suspect',
+  HIGH: 'badge-critical',
+  INSUFFICIENT_DATA: 'badge-offline',
+  NO_MODEL: 'badge-offline',
+};
 
 export const CommandCenter = () => {
   const {
@@ -37,6 +47,41 @@ export const CommandCenter = () => {
 
   const [filterStatus, setFilterStatus] = React.useState('ALL');
   const [filterRootCause, setFilterRootCause] = React.useState('ALL');
+
+  // Model drift chip per station (§21.5): the worst severity across
+  // the station's models, refreshed every 60 s. A failed fetch leaves
+  // the chip hidden rather than showing a stale verdict.
+  const [driftByStation, setDriftByStation] = React.useState({});
+  React.useEffect(() => {
+    if (safeStations.length === 0) return undefined;
+    let cancelled = false;
+    const rank = { NONE: 0, LOW: 1, MODERATE: 2, HIGH: 3 };
+    const load = async () => {
+      const next = {};
+      for (const st of safeStations) {
+        const id = st.id || st.station_id;
+        if (!id) continue;
+        try {
+          const res = await apiClient.getLatestDrift(id);
+          const rows = Object.values(res.latest || {});
+          if (rows.length > 0) {
+            const worst = rows.reduce((a, b) => ((rank[b.severity] ?? -1) > (rank[a.severity] ?? -1) ? b : a));
+            next[id] = worst.severity;
+          }
+        } catch (e) {
+          // Leave the chip hidden for this station; the drift panel
+          // in Model Governance shows the full state.
+        }
+      }
+      if (!cancelled) setDriftByStation(next);
+    };
+    load();
+    const interval = setInterval(load, 60000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [safeStations.length]);
 
   const filteredStations = safeStations.filter(st => {
     const statusMatch = filterStatus === 'ALL' || st.status === filterStatus;
@@ -209,6 +254,13 @@ export const CommandCenter = () => {
                           <div style={{ fontSize: '0.68rem', color: rootCause === 'NOMINAL' ? 'var(--text-muted)' : 'var(--neon-amber)', fontFamily: 'var(--font-mono)', marginTop: '2px' }}>
                             {displayCode(rootCause)}
                           </div>
+                          {driftByStation[st.id || st.station_id] && (
+                            <div style={{ marginTop: '4px' }} title="Model drift over the last 14 days vs training — see Model Governance for the numbers">
+                              <span className={`cyber-badge ${DRIFT_BADGE[driftByStation[st.id || st.station_id]] || 'badge-offline'}`} style={{ fontSize: '0.65rem' }}>
+                                DRIFT: {driftByStation[st.id || st.station_id]}
+                              </span>
+                            </div>
+                          )}
                           {decision && st.status !== 'NORMAL' && (
                             <div style={{ fontSize: '0.68rem', color: 'var(--text-secondary)', marginTop: '4px', lineHeight: 1.35, maxWidth: '280px' }}>
                               <strong style={{ color: 'var(--text-primary)' }}>{decision.title}:</strong> {decision.plain}
