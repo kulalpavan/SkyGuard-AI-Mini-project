@@ -310,7 +310,11 @@ banner sits at the top of the view, above the raw scores and evidence.
   NOT stack (a second SPIKE reads the same ~+8.5 °C, not +17 °C) — and
   the second inject reports **MERGED INTO OPEN INCIDENT** when the
   readings fold into the already-open incident instead of opening a
-  duplicate. A **Send 3 Normal Frames to Recover** button sends the §5c
+  duplicate. (Two rapid identical spikes are the exception, by design:
+  the pipeline reads the second one as a sustained offset, root cause
+  `CALIBRATION_DRIFT` rather than `THERMAL_SPIKE`, so it opens a second
+  incident — send one normal frame between spikes if the demo needs the
+  merge case.) A **Send 3 Normal Frames to Recover** button sends the §5c
   recovery frames in one click: the frames are built from the station's
   own recent readings (not the spiked live values), so they read NORMAL
   and the incident auto-resolves to `resolved`. The recover button lives
