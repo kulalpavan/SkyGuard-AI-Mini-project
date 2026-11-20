@@ -66,7 +66,7 @@ ALLOWED_ORIGINS = [
 
 # Default Seed Configuration (Used only on clean database first initialization)
 DEFAULT_ADMIN_USERNAME = os.getenv("DEFAULT_ADMIN_USERNAME", "admin")
-DEFAULT_ADMIN_PASSWORD = os.getenv("DEFAULT_ADMIN_PASSWORD", "sentinel2026" if DEMO_MODE else "")
+DEFAULT_ADMIN_PASSWORD = os.getenv("DEFAULT_ADMIN_PASSWORD", "Sentinel2026" if DEMO_MODE else "")
 if not DEMO_MODE and len(DEFAULT_ADMIN_PASSWORD) < 12:
     raise RuntimeError(
         "DEFAULT_ADMIN_PASSWORD must be at least 12 characters outside DEMO_MODE. "

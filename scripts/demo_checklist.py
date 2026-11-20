@@ -26,11 +26,12 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from backend.app.storage.database import get_db, insert_telemetry_batch, init_db
 from backend.app.config import DATABASE_URL, IS_POSTGRES
 
-# Real station coordinates for demo
+# Prototype stations for the SIH demo (must match the paper / runbook).
+# NOTE: AWS-01 was previously seeded here as "Bengaluru Urban" (12.9716, 77.5946),
+# which contradicts the prototype (Udupi) and overwrote it on every run.
 DEMO_STATIONS = {
-    "AWS-01": {"name": "Bengaluru Urban", "lat": 12.9716, "lon": 77.5946, "elev": 920, "region": "Deccan Plateau"},
-    "AWS-07": {"name": "Hyderabad Deccan", "lat": 17.385, "lon": 78.486, "elev": 542, "region": "Deccan"},
-    "AWS-08": {"name": "Visakhapatnam Coast", "lat": 17.686, "lon": 83.218, "elev": 45, "region": "Eastern Coast"},
+    "AWS-01": {"name": "Udupi", "lat": 13.34, "lon": 74.74, "elev": 27, "region": "Coastal Karnataka"},
+    "AWS-02": {"name": "Dakshina Kannada", "lat": 12.87, "lon": 74.88, "elev": 22, "region": "Coastal Karnataka"},
 }
 
 

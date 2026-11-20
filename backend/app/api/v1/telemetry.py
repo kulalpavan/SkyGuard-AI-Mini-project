@@ -108,6 +108,7 @@ async def ingest_esp32_telemetry(
         "seq": 42,
         "device_id": "esp32-aws01-edge",
         "station_id": "AWS-01",
+        "timestamp": "2026-11-20T12:00:00Z",
         "sensors": {
             "temperature": {"value": 24.5, "unit": "°C", "wmo_flag": 0},
             "humidity":    {"value": 65.0,  "unit": "%",  "wmo_flag": 0},
@@ -129,6 +130,9 @@ async def ingest_esp32_telemetry(
     The backend runs the full Tier-2 Cloud ML pipeline on the received data and
     immediately updates the live fleet state for the dashboard.
     Returns a cross-tier verification result (Edge AI vs Cloud ML).
+
+    The "timestamp" field is REQUIRED (ISO 8601, within 5 minutes of now):
+    without it the pipeline returns HTTP 422 SOURCE_TIMESTAMP_REQUIRED.
     """
     if not payload:
         raise HTTPException(

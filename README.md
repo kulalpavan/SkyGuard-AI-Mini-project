@@ -308,7 +308,7 @@ npm run backend
 npm run dev
 ```
 
-**Login:** use the admin username and password for the database your backend currently connects to. `DEFAULT_ADMIN_PASSWORD` only seeds a new account; changing that setting never resets an existing password. Use `python scripts/diagnose_admin_login.py` to check account existence, status, and whether the configured seed password matches without printing secrets. The example `admin` / `sentinel2026` works only if that is the account's stored password. Set a unique password and `SKYGUARD_SECRET_KEY` for production. The browser shows its demo quick-fill helper only when the running backend reports `DEMO_MODE=true`.
+**Login:** use the admin username and password for the database your backend currently connects to. `DEFAULT_ADMIN_PASSWORD` only seeds a new account; changing that setting never resets an existing password. Use `python scripts/diagnose_admin_login.py` to check account existence, status, and whether the configured seed password matches without printing secrets. In `DEMO_MODE=true` the seeded admin password is the one shown in the login screen's FOR SIH EVALUATORS box (`src/components/auth/LoginScreen.jsx`). Set a unique password and `SKYGUARD_SECRET_KEY` for production. The browser shows its demo quick-fill helper only when the running backend reports `DEMO_MODE=true`.
 
 A station needs **at least 720 clean distinct observations across 14 days** before training is permitted. The MATURE tier additionally needs at least 4,380 observations spanning two seasons.
 

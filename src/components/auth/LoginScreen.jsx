@@ -25,7 +25,7 @@ export const LoginScreen = () => {
     setErrorMsg('');
     if (role === 'admin') {
       setUsername('admin');
-      setPassword(demoMode ? 'sentinel2026' : '');
+      setPassword(demoMode ? 'Sentinel2026' : '');
     } else {
       setUsername('');
       setPassword('');
@@ -209,9 +209,9 @@ export const LoginScreen = () => {
                 <button
                   type="button"
                   className="demo-pill"
-                  onClick={() => handleDemoFill('admin', 'sentinel2026')}
+                  onClick={() => handleDemoFill('admin', 'Sentinel2026')}
                 >
-                  👑 Admin: admin / sentinel2026
+                  👑 Admin: admin / Sentinel2026
                 </button>
               ) : (
                 <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', textAlign: 'center', padding: '6px 0' }}>
