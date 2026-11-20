@@ -23,7 +23,7 @@ import { ESP32LiveMonitor } from './components/views/ESP32LiveMonitor';
 
 export const App = () => {
   const { isAuthenticated } = useAuth();
-  const { currentView } = useWeather();
+  const { currentView, activeStationId } = useWeather();
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   if (!isAuthenticated) {
@@ -59,7 +59,10 @@ export const App = () => {
       case 'edge-sync':
         return <EdgeSync />;
       case 'esp32-live-monitor':
-        return <ESP32LiveMonitor stationId="AWS-01" />;
+        // Was hardcoded to AWS-01: an operator for any other station got an
+        // empty monitor (their own station is filtered out of the fleet
+        // response by role scoping), so no decision could ever appear.
+        return <ESP32LiveMonitor stationId={activeStationId || 'AWS-01'} />;
       default:
         return <CommandCenter />;
     }
