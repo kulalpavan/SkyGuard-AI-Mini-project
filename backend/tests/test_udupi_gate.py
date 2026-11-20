@@ -53,26 +53,15 @@ def _make_station(sid, lat=13.34, lon=74.74, elev=27.0):
         conn.commit()
 
 
-def _fixture_rows(district, grid_point, shift_to_present=False):
+def _fixture_rows(district, grid_point):
     stamps, values = load_district_series(str(FIXTURES), district)
     rows = []
-    if shift_to_present:
-        now = dt.datetime.now(dt.timezone.utc).replace(
-            minute=0, second=0, microsecond=0)
-        n = len(values)
-        for k, (t, h, p) in enumerate(values):
-            when = now - dt.timedelta(hours=n - k)
-            rows.append({"timestamp": when.isoformat(), "temp": float(t), "hum": float(h),
-                         "pres": float(p), "wind": None, "rain": None, "battery": 12.6,
-                         "signal": -70.0, "raw_payload": {}, "qc_flag": "VALID",
-                         "grid_point": grid_point})
-    else:
-        for ts, (t, h, p) in zip(stamps, values):
-            when = dt.datetime.fromtimestamp(int(ts), tz=dt.timezone.utc)
-            rows.append({"timestamp": when.isoformat(), "temp": float(t), "hum": float(h),
-                         "pres": float(p), "wind": None, "rain": None, "battery": 12.6,
-                         "signal": -70.0, "raw_payload": {}, "qc_flag": "VALID",
-                         "grid_point": grid_point})
+    for ts, (t, h, p) in zip(stamps, values):
+        when = dt.datetime.fromtimestamp(int(ts), tz=dt.timezone.utc)
+        rows.append({"timestamp": when.isoformat(), "temp": float(t), "hum": float(h),
+                     "pres": float(p), "wind": None, "rain": None, "battery": 12.6,
+                     "signal": -70.0, "raw_payload": {}, "qc_flag": "VALID",
+                     "grid_point": grid_point})
     return rows
 
 
@@ -140,19 +129,41 @@ def test_demo_checklist_tags_seed_rows_synthetic(tmp_path):
     assert points == {"synthetic:demo-seed"}, points
 
 
-def test_flat_seed_rows_do_not_dominate_training():
+def test_flat_seed_rows_do_not_dominate_training(tmp_path):
     """End to end: the real 15,000 flat seed rows plus the real backfill
     no longer produce a 1.0 holdout rate. The rate must come back at the
-    clean-history value (~0.153) and the gate must still fail honestly."""
-    # The real demo file has no station_id column, so the seeder defaults
-    # to AWS-01 — the real demo station. Use it here, with the fixture
-    # rows on the same station, exactly like the live demo DB.
-    _make_station("AWS-01")
+    clean-history value (~0.153) and the gate must still fail honestly.
+
+    Two determinism traps, both measured 2026-11-20 (CI run 44768593732):
+      * The fixture must be UNSHIFTED. The climatology model uses
+        day-of-year, so shifting the fixture to the current hour makes
+        the holdout rate wobble by a few rows around the 0.15 line —
+        measured 0.1450 / 0.1508 / 0.1450 for the same series shifted
+        to 16:00 / 10:00 / 04:00 UTC — and this test flipped with the
+        clock (passed 15:54 UTC, failed 16:01 UTC).
+      * The seed rows must land on a TEST-ONLY station (UD-04), not
+        AWS-01. The disposable DB is shared, and AWS-01 accumulates
+        stray rows from other tests — test_timestamp_parsing uploads
+        one row for AWS-01 once the ESP32 security tests have created
+        the station. One extra row moves the 80/20 split by one and
+        flips this boundary test (reproduced: esp32 + parsing + this
+        file fails; esp32 + this file passes; parsing + this file
+        passes because the upload itself errors without AWS-01)."""
+    # The real demo file has no station_id column, so the seeder would
+    # default to AWS-01. Retarget a copy at UD-04: same 15,000 real
+    # flat rows, private history.
+    csv_path = tmp_path / "flat-seed.csv"
+    with (REPO_ROOT / "test_weather.csv").open() as src:
+        lines = src.readlines()
+    csv_path.write_text(
+        "station_id," + lines[0]
+        + "".join(f"UD-04,{line}" for line in lines[1:]))
+    _make_station("UD-04")
     mod = _load_demo_checklist()
-    mod.load_telemetry_from_csv(REPO_ROOT / "test_weather.csv")
+    mod.load_telemetry_from_csv(csv_path)
     insert_telemetry_batch(
-        "AWS-01", _fixture_rows("Udupi", "demo:udupi", shift_to_present=True))
-    metrics, status, jobrow = _run_if_job("AWS-01")
+        "UD-04", _fixture_rows("Udupi", "demo:udupi"))
+    metrics, status, jobrow = _run_if_job("UD-04")
     rate = metrics["anomaly_rate"]
     assert 0.10 < rate < 0.25, f"holdout rate {rate} — flat seed rows still dominate the fit"
     assert status == "CANDIDATE", f"model status {status}, expected CANDIDATE"
