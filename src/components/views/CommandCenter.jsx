@@ -2,6 +2,7 @@ import React from 'react';
 import { useWeather } from '../../context/WeatherContext';
 import { tacticalAudio } from '../../utils/audio';
 import { displayCode } from '../../utils/display';
+import { decisionFor } from '../DecisionBanner';
 
 export const CommandCenter = () => {
   const {
@@ -185,6 +186,10 @@ export const CommandCenter = () => {
                     const badge = !hasObservation || st.status === 'INACTIVE' ? 'badge-offline' : st.status === 'NORMAL' ? 'badge-normal' : (st.status === 'REGIONAL_EVENT' ? 'badge-extreme' : (st.status === 'SUSPECT' ? 'badge-suspect' : 'badge-critical'));
                     const rootCause = hasObservation ? (st.root_cause_diagnosis?.root_cause || st.final_assessment?.root_cause || 'NOMINAL') : 'No assessed observation yet';
                     const shi = hasObservation ? st.sensor_health?.overall_health_score : null;
+                    const decision = hasObservation ? decisionFor(st.final_assessment?.classification, st.final_assessment?.quality_state) : null;
+                    const nextStep = hasObservation ? (st.root_cause_diagnosis?.recommended_action || null) : null;
+                    const hybridScore = hasObservation ? st.final_assessment?.hybrid_score : null;
+                    const openIncident = safeIncidents.find(i => String(i.station_id || '').toUpperCase() === String(st.id || st.station_id || '').toUpperCase() && String(i.status || '').toLowerCase() === 'open');
                     const tFlag = hasObservation ? st.sensors?.temperature?.wmo_flag : null;
                     const hFlag = hasObservation ? st.sensors?.humidity?.wmo_flag : null;
                     const pFlag = hasObservation ? st.sensors?.pressure?.wmo_flag : null;
@@ -204,6 +209,19 @@ export const CommandCenter = () => {
                           <div style={{ fontSize: '0.68rem', color: rootCause === 'NOMINAL' ? 'var(--text-muted)' : 'var(--neon-amber)', fontFamily: 'var(--font-mono)', marginTop: '2px' }}>
                             {displayCode(rootCause)}
                           </div>
+                          {decision && st.status !== 'NORMAL' && (
+                            <div style={{ fontSize: '0.68rem', color: 'var(--text-secondary)', marginTop: '4px', lineHeight: 1.35, maxWidth: '280px' }}>
+                              <strong style={{ color: 'var(--text-primary)' }}>{decision.title}:</strong> {decision.plain}
+                              {hybridScore != null && (
+                                <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--neon-cyan)' }}> Hybrid {Number(hybridScore).toFixed(2)}.</span>
+                              )}
+                              {nextStep && (
+                                <div style={{ color: 'var(--neon-cyan)', marginTop: '2px' }}>
+                                  <i className="fa-solid fa-arrow-right"></i> {nextStep}
+                                </div>
+                              )}
+                            </div>
+                          )}
                         </td>
                         <td>
                           <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
@@ -228,9 +246,16 @@ export const CommandCenter = () => {
                         <td style={{ fontFamily: 'var(--font-mono)' }}>{reading(st.sensors?.humidity)}</td>
                         <td style={{ fontFamily: 'var(--font-mono)' }}>{reading(st.sensors?.pressure)}</td>
                         <td>
-                          <button className="cyber-btn btn-sm" onClick={() => handleViewModel(st.id || st.station_id)}>
-                            <i className="fa-solid fa-radar"></i> Inspect Station
-                          </button>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '5px', alignItems: 'flex-start' }}>
+                            <button className="cyber-btn btn-sm" onClick={() => handleViewModel(st.id || st.station_id)}>
+                              <i className="fa-solid fa-radar"></i> Inspect Station
+                            </button>
+                            {openIncident && (
+                              <button className="cyber-btn btn-sm btn-danger" onClick={() => setCurrentView('incidents')} title={`Open incident ${openIncident.id}: ${openIncident.reasoning?.headline || openIncident.explanation || ''}`}>
+                                <i className="fa-solid fa-triangle-exclamation"></i> Triage Incident
+                              </button>
+                            )}
+                          </div>
                         </td>
                       </tr>
                     );

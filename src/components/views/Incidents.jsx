@@ -9,11 +9,12 @@ import { PRIORITY_BADGE, ACTION_LABELS, compareIncidents, formatRisk, isClosedIn
 
 export const Incidents = () => {
   const { role, assignedStationId } = useAuth();
-  const { incidents, saveIncidents, clearAllIncidents, syncLiveOpenMeteoData } = useWeather();
+  const { incidents, saveIncidents, clearAllIncidents, syncLiveOpenMeteoData, adjudicateIncident } = useWeather();
   const [selectedIncident, setSelectedIncident] = useState(null);
   const [statusFilter, setStatusFilter] = useState('all');
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isClearing, setIsClearing] = useState(false);
+  const [actingId, setActingId] = useState(null);
 
   const isOperator = role === 'station_operator' || role === 'STATION_OPERATOR';
   const baseIncidents = isOperator && assignedStationId
@@ -36,6 +37,27 @@ export const Incidents = () => {
   const handleOpenIncident = (inc) => {
     setSelectedIncident(inc);
     tacticalAudio.playClick();
+  };
+
+  // One-click suggested action straight from the queue row: the button label
+  // is the action the model evidence recommends, and it calls the same
+  // adjudication endpoint the modal uses.
+  const handleQuickAction = async (inc, action) => {
+    if (actingId || !adjudicateIncident) return;
+    const suggested = inc.reasoning?.suggested_action;
+    if (action === 'REJECT' && suggested && suggested !== 'REJECT'
+      && !window.confirm(`The evidence does not support invalidating this reading yet (${inc.reasoning.suggested_action_reason}) Invalidate anyway?`)) {
+      return;
+    }
+    setActingId(inc.id);
+    try {
+      await adjudicateIncident(inc.id, action);
+      tacticalAudio.playSuccess();
+    } catch (e) {
+      console.warn('[Incidents View] Quick action failed:', e.message);
+    } finally {
+      setActingId(null);
+    }
   };
 
   const handleManualRefresh = async () => {
@@ -232,9 +254,33 @@ export const Incidents = () => {
                       </td>
                       <td><span className={`cyber-badge ${statusBadge}`}>{(inc.status || 'open').toUpperCase()}</span></td>
                       <td>
-                        <button className="cyber-btn btn-sm btn-primary" style={{ padding: '5px 8px', fontSize: '0.72rem', whiteSpace: 'nowrap' }} onClick={() => handleOpenIncident(inc)}>
-                          <i className="fa-solid fa-microscope"></i> Review
-                        </button>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '5px', alignItems: 'flex-start' }}>
+                          {inc.status === 'open' && inc.reasoning?.suggested_action && (
+                            <button
+                              className={`cyber-btn btn-sm ${inc.reasoning.suggested_action === 'REJECT' ? 'btn-danger' : inc.reasoning.suggested_action === 'GENUINE' ? 'btn-green' : 'btn-primary'}`}
+                              style={{ padding: '5px 8px', fontSize: '0.72rem', whiteSpace: 'nowrap' }}
+                              disabled={actingId === inc.id}
+                              onClick={() => handleQuickAction(inc, inc.reasoning.suggested_action)}
+                              title={`${ACTION_LABELS[inc.reasoning.suggested_action]} — ${inc.reasoning.suggested_action_reason || ''}`}
+                            >
+                              <i className="fa-solid fa-bolt"></i> {ACTION_LABELS[inc.reasoning.suggested_action]}
+                            </button>
+                          )}
+                          {inc.status === 'acknowledged' && (
+                            <button
+                              className="cyber-btn btn-sm"
+                              style={{ padding: '5px 8px', fontSize: '0.72rem', whiteSpace: 'nowrap' }}
+                              disabled={actingId === inc.id}
+                              onClick={() => handleQuickAction(inc, 'ACCEPT')}
+                              title="Close this incident once the work is done"
+                            >
+                              <i className="fa-solid fa-lock"></i> {ACTION_LABELS.ACCEPT}
+                            </button>
+                          )}
+                          <button className="cyber-btn btn-sm btn-primary" style={{ padding: '5px 8px', fontSize: '0.72rem', whiteSpace: 'nowrap' }} onClick={() => handleOpenIncident(inc)}>
+                            <i className="fa-solid fa-microscope"></i> Review
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   );

@@ -268,6 +268,62 @@ Acknowledging first from the Incidents view also works:
 6. **(2:20) Recovery** — run the three §5c normal frames, refresh Incidents:
    the incident shows `resolved`. Close on the map: both stations NORMAL.
 
+## 6b. What the audience sees when a fault is injected (decision + action)
+
+Every surface below shows the same thing in plain words: **the decision,
+what it means, and what the operator should do next** — the decision
+banner sits at the top of the view, above the raw scores and evidence.
+
+- **Fault Lab (the injection itself).** Click **Inject Fault on AWS-02**:
+  the Fault Lab first records the fault, then sends the faulted readings
+  through the pipeline (the inject endpoint alone only records a fault
+  row — the readings are what the model scores). Within a few seconds an
+  **INJECTION RESULT** panel appears: `DECISION: LOCAL SENSOR FAULT` (or
+  `LOCAL SENSOR FAULT — UNCONFIRMED`), the one-line explanation, and
+  **What to do next** with the recommended action and a **Review Incident**
+  button. If the faulted readings score within normal bounds, the panel
+  says so honestly ("No incident was raised…") instead of inventing one.
+  A **Send 3 Normal Frames to Recover** button sends the §5c recovery
+  frames in one click.
+- **Incident Triage (sidebar).** The sidebar's **Incident Triage** nav item
+  shows a red badge with the open-incident count, and the **Fleet Status**
+  panel underneath it lists stations needing attention and each station's
+  model status (IF ACTIVE/PENDING, Mamba ACTIVE/CANDIDATE/NOT REGISTERED)
+  — all updated by the app's 5-second fleet sync, no reload.
+- **Incidents table.** Each open row shows the decision headline and the
+  suggested action, plus a button for that action — e.g. **Acknowledge**
+  (or **Confirm Genuine** / **Flag Defect** when the reasoning suggests
+  it). Clicking it calls `POST /incidents/{id}/adjudicate` and the row
+  updates immediately. An acknowledged incident shows **Close Incident**.
+- **Incident detail (click Review).** The top of the modal is a decision
+  banner: the decision in plain words, the likely cause, the scores that
+  matter (Hybrid with its IF/Mamba contributions, IF score vs threshold,
+  Mamba score vs threshold and its largest prediction error), and
+  **WHAT TO DO NEXT** from the backend's recommended action. Below it,
+  the Model Prediction panel shows the same Mamba and hybrid numbers.
+  The footer buttons are **Acknowledge**, **Confirm Genuine**,
+  **Flag Defect**, and **Close Incident** — all wired to
+  `POST /incidents/{id}/adjudicate` (`ACKNOWLEDGE` / `GENUINE` /
+  `REJECT` / `ACCEPT`); the button the reasoning suggests is highlighted.
+  Press **Acknowledge** live: the incident moves to `acknowledged` and
+  the Close Incident button appears; press it and the incident closes.
+- **Station HUD and ESP32 Live Monitor.** The same decision banner appears
+  above the gauges/sensors whenever the station's latest assessment is
+  not NORMAL, with a **Review open incident** button that jumps to the
+  triage queue. (Fixed 2026-11-20: the live monitor was hardcoded to
+  AWS-01, so an operator for any other station saw an empty monitor and
+  no decision at all. It now follows the logged-in station — the admin
+  sees AWS-01, an AWS-02 operator sees AWS-02.)
+- **Command Center.** Each station row shows the decision in plain words,
+  the recommended action, and the hybrid score under its status badge,
+  plus a **Triage Incident** button when that station has an open incident.
+
+**What to say on stage:** read the banner out loud — "The model decided
+this is a local sensor fault, not weather, because only this station
+shows the departure while its neighbours do not. The recommended action
+is to inspect the sensor." Then press the suggested button and show the
+status change. All demo data is simulated — say so.
+
 ## Mamba scoring (ML add-on — run after the main demo, §1–§6)
 
 This turns on the ML layer for **AWS-02 (Dakshina Kannada)** so a live

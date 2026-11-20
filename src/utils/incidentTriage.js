@@ -11,6 +11,7 @@ export const ACTION_LABELS = {
   ACKNOWLEDGE: 'Acknowledge',
   GENUINE: 'Confirm Genuine Extreme',
   REJECT: 'Flag Defect / Invalidate',
+  ACCEPT: 'Close Incident',
 };
 
 export const isClosedIncident = (incident) =>

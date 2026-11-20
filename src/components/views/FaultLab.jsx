@@ -2,6 +2,32 @@ import React, { useState } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { useWeather } from '../../context/WeatherContext';
 import { tacticalAudio } from '../../utils/audio';
+import { apiClient } from '../../utils/apiClient';
+
+// Fault patterns mirror the backend's reevaluate() mappings, so the readings
+// Fault Lab sends are the same faults the pipeline knows how to score.
+// The inject endpoint only records an active_fault row — the faulted
+// readings sent here are what the pipeline actually scores, which is why
+// Fault Lab sends them (see DEMO_RUNBOOK.md §5b note).
+const buildFaultFrames = (faultId, base) => {
+  const at = (minutesAgo, patch) => ({ minutesAgo, ...patch });
+  switch (faultId) {
+    case 'SPIKE':
+      return [at(0, { temp: base.temp + 8.5, hum: base.hum, pres: base.pres, battery: base.battery })];
+    case 'DRIFT':
+      return [0.4, 0.8, 1.2].map((off, i) => at(2 - i, { temp: base.temp + off, hum: base.hum, pres: base.pres, battery: base.battery }));
+    case 'FLATLINE':
+      // Five identical frames: the pipeline flags a stuck sensor once the
+      // last four history rows are exactly identical.
+      return [4, 3, 2, 1, 0].map(minutesAgo => at(minutesAgo, { temp: base.temp, hum: base.hum, pres: base.pres, battery: base.battery }));
+    case 'POWER':
+      return [at(0, { temp: base.temp + 8, hum: base.hum, pres: base.pres, battery: 10.8 })];
+    case 'STORM':
+      return [at(0, { temp: base.temp - 6, hum: 98, pres: base.pres - 8, battery: base.battery })];
+    default:
+      return [at(0, { temp: base.temp + 8.5, hum: base.hum, pres: base.pres, battery: base.battery })];
+  }
+};
 
 const FAULT_TYPES = [
   {
@@ -64,6 +90,8 @@ export const FaultLab = () => {
   );
   const [selectedFault, setSelectedFault] = useState('SPIKE');
   const [lastInjected, setLastInjected] = useState(null);
+  const [sendState, setSendState] = useState(null);
+  const [isInjecting, setIsInjecting] = useState(false);
 
   const isOperator = role === 'station_operator' || role === 'STATION_OPERATOR';
 
@@ -95,16 +123,109 @@ export const FaultLab = () => {
     );
   }
 
-  const handleInject = () => {
+  const handleInject = async () => {
+    if (isInjecting) return;
+    setIsInjecting(true);
     tacticalAudio.playAlarm();
-    injectFault(selectedStation, selectedFault);
+    const startedAt = Date.now();
+    setSendState({ phase: 'injecting' });
+    try {
+      await injectFault(selectedStation, selectedFault);
+    } catch (e) {
+      setSendState({ phase: 'error', message: `Could not record the fault: ${e.message}` });
+      setIsInjecting(false);
+      return;
+    }
     setLastInjected({ station: selectedStation, fault: selectedFault, time: new Date().toLocaleTimeString() });
+
+    // The inject endpoint only records an active_fault row; the pipeline
+    // scores readings, so send the faulted readings through the telemetry
+    // batch endpoint. That is what produces a visible model decision.
+    const station = stations.find(s => s.id === selectedStation) || {};
+    const base = {
+      temp: station.sensors?.temperature?.value ?? 25.0,
+      hum: station.sensors?.humidity?.value ?? 60,
+      pres: station.sensors?.pressure?.value ?? 1010,
+      battery: station.battery ?? 12.6,
+    };
+    const frames = buildFaultFrames(selectedFault, base);
+    const rows = frames.map(f => ({
+      timestamp: new Date(Date.now() - f.minutesAgo * 60000).toISOString(),
+      temp: +Number(f.temp).toFixed(2),
+      hum: +Number(f.hum).toFixed(2),
+      pres: +Number(f.pres).toFixed(2),
+      battery: f.battery,
+      signal: -72,
+      wind: 0,
+      rain: 0,
+    }));
+    setSendState({ phase: 'sending', frames: rows.length });
+    let sent;
+    try {
+      sent = await apiClient.replayTelemetryBatch(selectedStation, rows);
+    } catch (e) {
+      setSendState({ phase: 'error', message: `Faulted readings were rejected: ${e.message}` });
+      setIsInjecting(false);
+      return;
+    }
+    const accepted = sent?.accepted ?? 0;
+    setSendState({ phase: 'waiting', frames: rows.length, accepted });
+    // Poll the incident queue for a fresh open incident on this station.
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      await new Promise(r => setTimeout(r, 2000));
+      try {
+        const res = await apiClient.getIncidents(selectedStation, 'open');
+        const fresh = (res?.incidents || []).find(i => new Date(i.created_at || 0).getTime() >= startedAt - 5000);
+        if (fresh) {
+          setSendState({ phase: 'decided', incident: fresh, frames: rows.length, accepted });
+          tacticalAudio.playSuccess();
+          setIsInjecting(false);
+          return;
+        }
+      } catch (e) { /* keep polling */ }
+    }
+    setSendState({ phase: 'no-incident', frames: rows.length, accepted });
+    setIsInjecting(false);
+  };
+
+  // Recovery: three jittered normal frames — three consecutive normal
+  // readings auto-resolve an open incident (runbook §5c).
+  const handleRecover = async () => {
+    const station = stations.find(s => s.id === selectedStation) || {};
+    const base = {
+      temp: station.sensors?.temperature?.value ?? 25.0,
+      hum: station.sensors?.humidity?.value ?? 60,
+      pres: station.sensors?.pressure?.value ?? 1010,
+      battery: station.battery ?? 12.6,
+    };
+    const jitters = [[0.1, 0.5, 0.1], [-0.2, -1, -0.2], [0.2, 1, 0.15]];
+    const rows = jitters.map(([dt, dh, dp], i) => ({
+      timestamp: new Date(Date.now() - (2 - i) * 60000).toISOString(),
+      temp: +(base.temp + dt).toFixed(2),
+      hum: +(base.hum + dh).toFixed(2),
+      pres: +(base.pres + dp).toFixed(2),
+      battery: base.battery,
+      signal: -72,
+      wind: 0,
+      rain: 0,
+    }));
+    setSendState({ phase: 'recovering' });
+    try {
+      await apiClient.replayTelemetryBatch(selectedStation, rows);
+      await clearFaults();
+      setLastInjected(null);
+      setSendState({ phase: 'recovered' });
+      tacticalAudio.playSuccess();
+    } catch (e) {
+      setSendState({ phase: 'error', message: `Recovery frames were rejected: ${e.message}` });
+    }
   };
 
   const handleReset = () => {
     tacticalAudio.playClick();
     clearFaults();
     setLastInjected(null);
+    setSendState(null);
     tacticalAudio.playSuccess();
   };
 
@@ -195,19 +316,79 @@ export const FaultLab = () => {
               READY TO INJECT: {FAULT_TYPES.find(f => f.id === selectedFault)?.name} → {selectedStation}
             </div>
             <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: '2px' }}>
-              Triggers real-time pipeline inference, QC reason coding, and incident queue flagging.
+              Records the fault, then sends faulted readings through the pipeline so the model decision actually appears below.
             </div>
           </div>
 
           <div style={{ display: 'flex', gap: '8px' }}>
-            <button className="cyber-btn btn-sm btn-danger" onClick={handleInject} style={{ padding: '7px 16px', fontSize: '0.78rem' }}>
-              <i className="fa-solid fa-play"></i> Inject Fault on {selectedStation}
+            <button className="cyber-btn btn-sm btn-danger" onClick={handleInject} disabled={isInjecting} style={{ padding: '7px 16px', fontSize: '0.78rem' }}>
+              <i className="fa-solid fa-play"></i> {isInjecting ? ' Injecting…' : ` Inject Fault on ${selectedStation}`}
             </button>
             <button className="cyber-btn btn-sm" onClick={() => setCurrentView('incidents')} style={{ fontSize: '0.78rem' }}>
               <i className="fa-solid fa-triangle-exclamation"></i> View Incident Queue
             </button>
           </div>
         </div>
+
+        {/* Injection result: the model decision the fault produced */}
+        {sendState && (
+          <div style={{ marginTop: '16px', background: 'rgba(10,15,29,0.8)', border: '1px solid var(--border-subtle)', borderRadius: '6px', padding: '14px 16px' }}>
+            <div style={{ fontFamily: 'var(--font-tactical)', fontSize: '0.74rem', color: 'var(--neon-cyan)', marginBottom: '8px' }}>
+              <i className="fa-solid fa-flask-vial"></i> INJECTION RESULT
+            </div>
+            {sendState.phase === 'injecting' && (
+              <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>Recording the fault on {selectedStation}…</div>
+            )}
+            {sendState.phase === 'sending' && (
+              <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>Sending {sendState.frames} faulted reading{sendState.frames > 1 ? 's' : ''} through the pipeline…</div>
+            )}
+            {sendState.phase === 'waiting' && (
+              <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+                {sendState.accepted} of {sendState.frames} faulted reading{sendState.frames > 1 ? 's' : ''} accepted — waiting for the pipeline decision…
+              </div>
+            )}
+            {sendState.phase === 'decided' && sendState.incident && (
+              <div>
+                <div style={{ fontFamily: 'var(--font-tactical)', fontSize: '0.9rem', fontWeight: 800, color: sendState.incident.quality_state === 'REGIONAL_EVENT' ? '#a78bfa' : 'var(--neon-crimson)' }}>
+                  DECISION: {String(sendState.incident.quality_state || '').replace(/_/g, ' ')}
+                </div>
+                <div style={{ fontSize: '0.8rem', color: 'var(--text-primary)', lineHeight: 1.45, marginTop: '4px' }}>
+                  {sendState.incident.reasoning?.headline || sendState.incident.explanation || 'An incident was raised.'}
+                </div>
+                {sendState.incident.reasoning?.suggested_action && (
+                  <div style={{ fontSize: '0.76rem', color: 'var(--neon-cyan)', marginTop: '6px' }}>
+                    <i className="fa-solid fa-arrow-right"></i> What to do next: {sendState.incident.reasoning.suggested_action} — {sendState.incident.reasoning.suggested_action_reason}
+                  </div>
+                )}
+                <div style={{ display: 'flex', gap: '8px', marginTop: '12px', flexWrap: 'wrap' }}>
+                  <button className="cyber-btn btn-sm btn-primary" onClick={() => setCurrentView('incidents')}>
+                    <i className="fa-solid fa-microscope"></i> Review Incident {sendState.incident.id}
+                  </button>
+                  <button className="cyber-btn btn-sm" onClick={handleRecover}>
+                    <i className="fa-solid fa-heart-pulse"></i> Send 3 Normal Frames to Recover
+                  </button>
+                </div>
+              </div>
+            )}
+            {sendState.phase === 'no-incident' && (
+              <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', lineHeight: 1.45 }}>
+                No incident was raised — the {sendState.frames} faulted reading{sendState.frames > 1 ? 's' : ''} scored within this station&apos;s normal bounds.
+                The fault may be too small for this station&apos;s thresholds; try <strong style={{ color: 'var(--text-primary)' }}>Sensor Spike</strong>, which is the reliable demo fault.
+              </div>
+            )}
+            {sendState.phase === 'recovering' && (
+              <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>Sending 3 normal frames to recover…</div>
+            )}
+            {sendState.phase === 'recovered' && (
+              <div style={{ fontSize: '0.78rem', color: 'var(--neon-green)' }}>
+                Recovery frames sent. The incident auto-resolves after 3 consecutive normal readings — check the Incident Queue.
+              </div>
+            )}
+            {sendState.phase === 'error' && (
+              <div style={{ fontSize: '0.78rem', color: 'var(--neon-crimson)' }}>{sendState.message}</div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { apiClient } from '../../utils/apiClient';
+import { useWeather } from '../../context/WeatherContext';
+import { DecisionBanner } from '../DecisionBanner';
 
 // ─── WMO Flag Display ─────────────────────────────────────────────────────────
 const WMO_LABELS = { 0: 'WMO 0 PASS', 1: 'WMO 1 SUSPECT', 2: 'WMO 2 ERRONEOUS' };
@@ -93,6 +95,7 @@ const statusColor = (s) => {
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 export const ESP32LiveMonitor = ({ stationId = 'AWS-01' }) => {
+  const { incidents, setCurrentView } = useWeather();
   const [liveData, setLiveData] = useState(null);
   const [history, setHistory] = useState([]);
   const [backendUrl, setBackendUrl] = useState('http://127.0.0.1:8000');
@@ -178,6 +181,9 @@ export const ESP32LiveMonitor = ({ stationId = 'AWS-01' }) => {
   const rootCause = liveData?.root_cause_diagnosis ?? {};
   const fa        = liveData?.final_assessment ?? {};
   const isEsp32   = liveData?.esp32_live === true;
+  const openIncident = (incidents || []).find(
+    i => String(i.station_id || '').toUpperCase() === String(stationId || '').toUpperCase() && String(i.status || '').toLowerCase() === 'open'
+  );
 
   return (
     <div className="cyber-card" style={{ marginBottom: '20px' }}>
@@ -289,6 +295,20 @@ export const ESP32LiveMonitor = ({ stationId = 'AWS-01' }) => {
               </div>
             )}
           </div>
+        )}
+
+        {/* ── Model decision banner (cloud verdict + what to do) ── */}
+        {fa?.classification && liveData?.status !== 'NORMAL' && (
+          <DecisionBanner
+            assessment={fa}
+            mamba={liveData?.mamba_model}
+            hybrid={liveData?.hybrid}
+            rootCause={rootCause}
+            incident={openIncident}
+            onReviewIncident={openIncident ? () => setCurrentView('incidents') : undefined}
+            ifScore={liveData?.ml_model?.anomaly_score}
+            ifThreshold={liveData?.ml_model?.threshold}
+          />
         )}
 
         {/* ── Sensor Table ── */}

@@ -1,7 +1,8 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useWeather } from '../../context/WeatherContext';
 import { tacticalAudio } from '../../utils/audio';
 import { PRIORITY_BADGE, ACTION_LABELS } from '../../utils/incidentTriage';
+import { DecisionBanner } from '../DecisionBanner';
 
 const EFFECT_STYLE = {
   supports: { icon: 'fa-circle-exclamation', color: 'var(--crimson-alert)', label: 'Points to a fault' },
@@ -11,18 +12,25 @@ const EFFECT_STYLE = {
 
 export const IncidentModal = ({ incident, onClose }) => {
   const { adjudicateIncident } = useWeather();
+  const [acting, setActing] = useState(null);
 
   if (!incident) return null;
 
   const reasoning = incident.reasoning || null;
   const suggestedAction = reasoning?.suggested_action;
 
-  const handleAction = (action) => {
+  const handleAction = async (action) => {
+    if (acting) return;
     if (action === 'REJECT' && suggestedAction && suggestedAction !== 'REJECT'
       && !window.confirm(`The evidence does not support invalidating this reading yet (${reasoning.suggested_action_reason}) Invalidate anyway?`)) {
       return;
     }
-    adjudicateIncident(incident.id, action);
+    setActing(action);
+    try {
+      await adjudicateIncident(incident.id, action);
+    } finally {
+      setActing(null);
+    }
     onClose();
   };
 
@@ -120,6 +128,17 @@ export const IncidentModal = ({ incident, onClose }) => {
         </div>
 
         <div className="modal-body" id="modal-inc-content" style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+          {/* Decision banner: the verdict and what to do, first — not buried below the evidence */}
+          <DecisionBanner
+            assessment={finalAss}
+            mamba={evidence.mamba_model}
+            hybrid={evidence.hybrid}
+            rootCause={finalAss.root_cause_diagnosis || evidence.root_cause_diagnosis}
+            reasoning={reasoning}
+            ifScore={modelPred.anomaly_score}
+            ifThreshold={modelPred.threshold}
+          />
+
           {/* Status Header Strip */}
           <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
             <span className={`cyber-badge ${badgeClass}`}>{incident.severity?.toUpperCase()} SEVERITY</span>
@@ -180,6 +199,64 @@ export const IncidentModal = ({ incident, onClose }) => {
                     {modelPred.model_id || (modelPred.status === 'ARTIFACT_UNAVAILABLE' ? 'Artifact unavailable' : 'None')}
                   </span>
                 </div>
+                {/* Mamba temporal engine + hybrid score (wired in by the Mamba build) */}
+                {(() => {
+                  const mambaModel = evidence.mamba_model || {};
+                  const hybridModel = evidence.hybrid || {};
+                  const mambaScore = finalAss.mamba_score ?? mambaModel.score ?? null;
+                  const hybridScore = finalAss.hybrid_score ?? hybridModel.S_hybrid ?? null;
+                  if (mambaScore == null && hybridScore == null && !mambaModel.has_model) {
+                    return (
+                      <div style={{ color: 'var(--text-muted)', fontSize: '0.68rem' }}>
+                        No Mamba model registered for this station yet — the hybrid score is unavailable.
+                      </div>
+                    );
+                  }
+                  const errLabels = ['T', 'H', 'P'];
+                  const errors = finalAss.mamba_errors || mambaModel.errors || null;
+                  return (
+                    <>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: '4px', marginTop: '2px' }}>
+                        <span style={{ color: 'var(--text-muted)' }}>Mamba Score:</span>
+                        <span style={{ fontWeight: 600, color: mambaModel.is_anomaly ? 'var(--crimson-alert)' : 'var(--text-primary)' }}>
+                          {mambaScore != null ? Number(mambaScore).toFixed(2) : 'N/A'}
+                          {mambaModel.threshold != null ? ` (anomaly above ${Number(mambaModel.threshold).toFixed(2)})` : ''}
+                        </span>
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                        <span style={{ color: 'var(--text-muted)' }}>Mamba Result:</span>
+                        <span style={{ fontWeight: 700, color: (finalAss.mamba_status === 'ANOMALY' || mambaModel.status === 'ANOMALY') ? 'var(--crimson-alert)' : 'var(--emerald-success)' }}>
+                          {finalAss.mamba_status || mambaModel.status || 'NOT AVAILABLE'}
+                        </span>
+                      </div>
+                      {Array.isArray(errors) && errors.length === 3 && (
+                        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                          <span style={{ color: 'var(--text-muted)' }}>Prediction Errors:</span>
+                          <span style={{ color: 'var(--text-primary)' }}>
+                            {errors.map((e, i) => `${errLabels[i]} ${Number(e).toFixed(2)}`).join(' · ')}
+                          </span>
+                        </div>
+                      )}
+                      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                        <span style={{ color: 'var(--text-muted)' }}>Hybrid Score:</span>
+                        <span style={{ fontWeight: 600, color: 'var(--neon-cyan)' }}>
+                          {hybridScore != null ? Number(hybridScore).toFixed(3) : 'N/A'}
+                          {hybridModel.contrib_IF != null && hybridModel.contrib_Mamba != null
+                            ? ` (IF ${Number(hybridModel.contrib_IF).toFixed(2)} + Mamba ${Number(hybridModel.contrib_Mamba).toFixed(2)})`
+                            : (finalAss.hybrid_contributions
+                              ? ` (IF ${Number(finalAss.hybrid_contributions.IF ?? 0).toFixed(2)} + Mamba ${Number(finalAss.hybrid_contributions.Mamba ?? 0).toFixed(2)})`
+                              : '')}
+                        </span>
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                        <span style={{ color: 'var(--text-muted)', fontSize: '0.68rem' }}>Mamba Model:</span>
+                        <span style={{ color: 'var(--text-secondary)', fontSize: '0.68rem' }}>
+                          {mambaModel.model_id || 'None'}
+                        </span>
+                      </div>
+                    </>
+                  );
+                })()}
                 {!modelPred.has_model && evidence.source_timestamp && (
                   <div style={{ color: 'var(--text-muted)', fontSize: '0.68rem' }}>
                     No model score was recorded for this observation. Incident evidence is a source-time snapshot.
@@ -441,22 +518,28 @@ export const IncidentModal = ({ incident, onClose }) => {
 
         {/* Modal Footer */}
         <div className="modal-footer" style={{ marginTop: '24px', borderTop: '1px solid rgba(255, 255, 255, 0.1)', paddingTop: '20px' }}>
-          {['resolved', 'closed', 'rejected'].includes(incident.status?.toLowerCase()) || incident.action_taken ? (
+          {['resolved', 'closed', 'rejected'].includes(incident.status?.toLowerCase()) ? (
             <div style={{ width: '100%', textAlign: 'center', padding: '8px', background: 'rgba(0, 255, 102, 0.1)', border: '1px solid var(--emerald-success)', borderRadius: '4px', color: 'var(--emerald-success)', fontFamily: 'var(--font-mono)', fontSize: '0.8rem' }}>
               <i className="fa-solid fa-lock" style={{ marginRight: '8px' }}></i>
               INCIDENT {incident.status?.toUpperCase()} — Adjudicated {incident.action_taken ? `as ${incident.action_taken}` : ''} by {incident.adjudicated_by || 'Operator'}
             </div>
           ) : (
             <>
-              <button className={`cyber-btn btn-sm ${suggestedAction === 'ACKNOWLEDGE' ? 'btn-primary' : ''}`} onClick={() => handleAction('ACKNOWLEDGE')}>
+              <button className={`cyber-btn btn-sm ${suggestedAction === 'ACKNOWLEDGE' ? 'btn-primary' : ''}`} disabled={!!acting} onClick={() => handleAction('ACKNOWLEDGE')}>
                 <i className="fa-solid fa-check"></i> {ACTION_LABELS.ACKNOWLEDGE}{suggestedAction === 'ACKNOWLEDGE' ? ' (Suggested)' : ''}
               </button>
-              <button className="cyber-btn btn-sm btn-green" style={suggestedAction === 'GENUINE' ? { boxShadow: '0 0 0 2px var(--emerald-success)' } : undefined} onClick={() => handleAction('GENUINE')}>
+              <button className="cyber-btn btn-sm btn-green" style={suggestedAction === 'GENUINE' ? { boxShadow: '0 0 0 2px var(--emerald-success)' } : undefined} disabled={!!acting} onClick={() => handleAction('GENUINE')}>
                 <i className="fa-solid fa-cloud-bolt"></i> {ACTION_LABELS.GENUINE}{suggestedAction === 'GENUINE' ? ' (Suggested)' : ''}
               </button>
-              <button className="cyber-btn btn-sm btn-danger" style={suggestedAction === 'REJECT' ? { boxShadow: '0 0 0 2px var(--crimson-alert)' } : undefined} onClick={() => handleAction('REJECT')}>
+              <button className="cyber-btn btn-sm btn-danger" style={suggestedAction === 'REJECT' ? { boxShadow: '0 0 0 2px var(--crimson-alert)' } : undefined} disabled={!!acting} onClick={() => handleAction('REJECT')}>
                 <i className="fa-solid fa-ban"></i> {ACTION_LABELS.REJECT}{suggestedAction === 'REJECT' ? ' (Suggested)' : ''}
               </button>
+              <button className="cyber-btn btn-sm" disabled={!!acting} onClick={() => handleAction('ACCEPT')} title="Close this incident once the work is done">
+                <i className="fa-solid fa-lock"></i> {ACTION_LABELS.ACCEPT}
+              </button>
+              {acting && (
+                <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>Saving…</span>
+              )}
             </>
           )}
         </div>

@@ -284,6 +284,10 @@ class ApiClient {
     });
   }
 
+  async getFaultStatus(stationId) {
+    return await this.request(`/stations/${stationId}/faults`);
+  }
+
   async resetFleet() {
     return await this.request('/stations/fleet/faults/reset', {
       method: 'POST'

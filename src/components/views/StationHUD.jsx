@@ -4,6 +4,7 @@ import { useAuth } from '../../context/AuthContext';
 import { Chart } from 'chart.js/auto';
 import { apiClient } from '../../utils/apiClient';
 import { displayCode } from '../../utils/display';
+import { DecisionBanner } from '../DecisionBanner';
 
 Chart.defaults.font.family = 'Roboto';
 
@@ -11,7 +12,7 @@ const displayReading = value => value == null || !Number.isFinite(Number(value))
 const displayPercent = value => value == null ? '—' : `${value}%`;
 
 export const StationHUD = () => {
-  const { stations, activeStationId, history } = useWeather();
+  const { stations, activeStationId, history, incidents, setCurrentView } = useWeather();
   const { assignedStationId } = useAuth();
   const [stationQC, setStationQC] = useState(null);
   const [qcLoading, setQcLoading] = useState(false);
@@ -234,6 +235,10 @@ export const StationHUD = () => {
 
   const xaiAttributions = mlResult?.xai_explanation?.attributions || [];
 
+  const openIncident = (incidents || []).find(
+    i => String(i.station_id || '').toUpperCase() === String(station.id || '').toUpperCase() && String(i.status || '').toLowerCase() === 'open'
+  );
+
   return (
     <>
       {/* Station Profile & Model Identity Banner */}
@@ -276,6 +281,20 @@ export const StationHUD = () => {
           </button>
         </div>
       </div>
+
+      {/* Model decision banner: verdict + scores + what to do, at a glance */}
+      {finalAssessment?.classification && (
+        <DecisionBanner
+          assessment={finalAssessment}
+          mamba={station.mamba_model}
+          hybrid={station.hybrid}
+          rootCause={rootCauseDiag}
+          incident={openIncident}
+          onReviewIncident={openIncident ? () => setCurrentView('incidents') : undefined}
+          ifScore={mlResult?.anomaly_score}
+          ifThreshold={mlResult?.threshold}
+        />
+      )}
 
       {/* Sensor Gauges Grid with WMO Standard Quality Flags */}
       <div className="gauge-grid">
