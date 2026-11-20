@@ -5,7 +5,7 @@ import { tacticalAudio } from '../../utils/audio';
 import { apiClient } from '../../utils/apiClient';
 
 export const Sidebar = ({ collapsed, setCollapsed }) => {
-  const { role, user, logout } = useAuth();
+  const { role, user, logout, assignedStationId } = useAuth();
   const { currentView, setCurrentView, incidents, offlineBuffer, activeStationId, stations, setActiveStationId, activeStationModels } = useWeather();
   const [audioActive, setAudioActive] = useState(true);
   const [modelRegistry, setModelRegistry] = useState({});
@@ -40,10 +40,20 @@ export const Sidebar = ({ collapsed, setCollapsed }) => {
   // Model registry status per station (ACTIVE / CANDIDATE), from the real
   // model registry API. Refreshed when the station roster changes or a
   // training event updates the active model.
-  const stationIdsKey = (stations || []).map(s => s.id).sort().join(',');
+  // Finding D: operators may only see their own station — fetching
+  // /stations/{id}/models for every station in the roster 403s for the
+  // stations they cannot access ("Station identity violation") and
+  // litters the console on every login. Scope the fetch (and the rows
+  // below) to the stations the logged-in user can actually see; admin
+  // behaviour (all stations) is unchanged.
+  const isOperator = role !== 'admin';
+  const visibleStations = isOperator
+    ? (stations || []).filter(s => s.id === assignedStationId)
+    : (stations || []);
+  const stationIdsKey = visibleStations.map(s => s.id).sort().join(',');
   useEffect(() => {
     let cancelled = false;
-    const ids = (stations || []).map(s => s.id).filter(Boolean);
+    const ids = visibleStations.map(s => s.id).filter(Boolean);
     if (ids.length === 0) return;
     Promise.all(ids.map(async (id) => {
       try {
@@ -330,7 +340,7 @@ export const Sidebar = ({ collapsed, setCollapsed }) => {
             </div>
           ))}
           <div style={{ marginTop: '6px', paddingTop: '6px', borderTop: '1px solid var(--border-subtle)' }}>
-            {(stations || []).map(st => {
+            {visibleStations.map(st => {
               const reg = modelRegistry[st.id];
               // The IF status comes from the registry API this sidebar
               // already fetches (reg.if). The fleet station's

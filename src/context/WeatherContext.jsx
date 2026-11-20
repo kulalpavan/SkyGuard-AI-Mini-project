@@ -200,7 +200,7 @@ export const WeatherProvider = ({ children }) => {
     }
   }, [stations, activeStationId, role, assignedStationId, stationCredentialsLoaded, isStationOperator]);
 
-  // Sync active model for activeStationId from Cloud PostgreSQL backend
+  // Sync active model for activeStationId from SQLite backend
   const refreshActiveStationModel = useCallback(async (stId) => {
     const targetId = stId || activeStationId;
     if (!session?.isAuthenticated || !targetId) return null;
@@ -635,7 +635,7 @@ export const WeatherProvider = ({ children }) => {
         backendRes = await apiClient.trainStationModel(stationId, { version });
       } catch (backendErr) {
         // Surface backend errors directly — no silent fallback to in-browser ML.
-        // Training must use Cloud PostgreSQL data, not browser-side preview rows.
+        // Training must use SQLite data, not browser-side preview rows.
         console.error("[WeatherContext] Backend training call failed:", backendErr.message);
         throw backendErr;
       }

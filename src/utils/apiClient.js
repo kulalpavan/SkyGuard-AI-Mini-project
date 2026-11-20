@@ -1,7 +1,7 @@
 /**
  * SkyGuard-AI — Backend API Client
  * 
- * Handles authenticated communication with the FastAPI / Cloud PostgreSQL backend service.
+ * Handles authenticated communication with the FastAPI / SQLite backend service.
  */
 
 const API_ROOT = import.meta.env.VITE_API_BASE_URL ? import.meta.env.VITE_API_BASE_URL.replace(/\/+$/, '') : '';
@@ -226,7 +226,7 @@ class ApiClient {
   }
 
   // -------------------------------------------------------------------------
-  // Cloud PostgreSQL Telemetry Pipeline Endpoints
+  // SQLite Telemetry Pipeline Endpoints
   // -------------------------------------------------------------------------
 
   async uploadStationTelemetry(stationId, fileOrList) {

@@ -1,5 +1,6 @@
 import React from 'react';
 import { useWeather } from '../../context/WeatherContext';
+import { useAuth } from '../../context/AuthContext';
 import { tacticalAudio } from '../../utils/audio';
 import { displayCode } from '../../utils/display';
 import { apiClient } from '../../utils/apiClient';
@@ -51,14 +52,24 @@ export const CommandCenter = () => {
   // Model drift chip per station (§21.5): the worst severity across
   // the station's models, refreshed every 60 s. A failed fetch leaves
   // the chip hidden rather than showing a stale verdict.
+  // Finding D: CommandCenter mounts briefly on operator login (App.jsx
+  // renders it as the default view before currentView settles), and the
+  // drift fetch below used to hit every station — operators 403 on the
+  // stations they cannot access. Scope it to the stations the logged-in
+  // user can see; admin behaviour (all stations) is unchanged.
+  const { role, assignedStationId } = useAuth();
+  const driftStations = role === 'admin'
+    ? safeStations
+    : safeStations.filter(st => (st.id || st.station_id) === assignedStationId);
+  const driftStationIdsKey = driftStations.map(st => st.id || st.station_id).sort().join(',');
   const [driftByStation, setDriftByStation] = React.useState({});
   React.useEffect(() => {
-    if (safeStations.length === 0) return undefined;
+    if (driftStations.length === 0) return undefined;
     let cancelled = false;
     const rank = { NONE: 0, LOW: 1, MODERATE: 2, HIGH: 3 };
     const load = async () => {
       const next = {};
-      for (const st of safeStations) {
+      for (const st of driftStations) {
         const id = st.id || st.station_id;
         if (!id) continue;
         try {
@@ -81,7 +92,7 @@ export const CommandCenter = () => {
       cancelled = true;
       clearInterval(interval);
     };
-  }, [safeStations.length]);
+  }, [driftStationIdsKey]);
 
   const filteredStations = safeStations.filter(st => {
     const statusMatch = filterStatus === 'ALL' || st.status === filterStatus;

@@ -3,6 +3,15 @@ import { useAuth } from '../../context/AuthContext';
 import { useWeather } from '../../context/WeatherContext';
 import { tacticalAudio } from '../../utils/audio';
 import { apiClient } from '../../utils/apiClient';
+import {
+  getFaultBaseline,
+  saveFaultBaseline,
+  clearFaultBaseline,
+  clearAllFaultBaselines,
+  getFaultLabStation,
+  saveFaultLabStation,
+  classifyInjectionResult,
+} from '../../utils/faultBaseline';
 
 // Fault patterns mirror the backend's reevaluate() mappings, so the readings
 // Fault Lab sends are the same faults the pipeline knows how to score.
@@ -85,13 +94,92 @@ const FAULT_TYPES = [
 export const FaultLab = () => {
   const { role, assignedStationId } = useAuth();
   const { injectFault, clearFaults, stations, setCurrentView } = useWeather();
-  const [selectedStation, setSelectedStation] = useState(
-    (role === 'station_operator' && assignedStationId) ? assignedStationId : (stations[0]?.id || '')
-  );
+  // The station the lab works on. Remembered in localStorage so it
+  // survives navigating away and back: without this the panel remounts
+  // on the first station (AWS-01) and the episode banner + Recover
+  // button then act on AWS-01's (open, seeded) incident instead of the
+  // station that was actually injected (finding B).
+  const [selectedStation, setSelectedStation] = useState(() => {
+    if (role === 'station_operator' && assignedStationId) return assignedStationId;
+    return getFaultLabStation(window.localStorage) || (stations[0]?.id || '');
+  });
   const [selectedFault, setSelectedFault] = useState('SPIKE');
   const [lastInjected, setLastInjected] = useState(null);
   const [sendState, setSendState] = useState(null);
   const [isInjecting, setIsInjecting] = useState(false);
+  // The fault episode that is live for the selected station right now,
+  // from the backend (open incident and/or active fault row) — NOT from
+  // local component state, so the Recover button survives navigating
+  // away from this view and back (finding B).
+  const [activeEpisode, setActiveEpisode] = useState(null);
+
+  // The station's live sensor values as the fault-frame base. Used only
+  // to capture a fresh clean baseline; fault frames themselves are
+  // always built from the stored baseline (finding A).
+  //
+  // A station with no processed observation yet has no fleet entry, so
+  // reading the live sensors there silently falls back to 25.0 C / 60 %
+  // / 1010 hPa — plausible for temperature but ~30 %RH away from this
+  // station's real humidity, which the trained model then flags on
+  // every recover frame (residual ~-16 %RH), so the incident never
+  // auto-resolves. Use the latest stored telemetry row instead; the
+  // hardcoded values are only a last resort for a station with no
+  // history at all.
+  const fetchLiveBase = async (stationId) => {
+    const station = stations.find(s => s.id === stationId) || {};
+    const live = {
+      temp: station.sensors?.temperature?.value ?? null,
+      hum: station.sensors?.humidity?.value ?? null,
+      pres: station.sensors?.pressure?.value ?? null,
+      battery: station.battery ?? 12.6,
+    };
+    if (live.temp != null && live.hum != null && live.pres != null) return live;
+    try {
+      const stats = await apiClient.getStationTelemetryStats(stationId);
+      const latest = stats?.latest_observation;
+      if (latest && latest.temperature != null) {
+        return {
+          temp: latest.temperature,
+          hum: latest.humidity ?? live.hum ?? 60,
+          pres: latest.pressure ?? live.pres ?? 1010,
+          battery: latest.battery ?? live.battery ?? 12.6,
+        };
+      }
+    } catch (e) { /* fall through to the hardcoded last resort */ }
+    return {
+      temp: live.temp ?? 25.0,
+      hum: live.hum ?? 60,
+      pres: live.pres ?? 1010,
+      battery: live.battery ?? 12.6,
+    };
+  };
+
+  const refreshEpisode = async (stationId) => {
+    if (!stationId) return;
+    try {
+      const [incRes, faultRes] = await Promise.all([
+        apiClient.getIncidents(stationId, 'open'),
+        apiClient.getFaultStatus(stationId),
+      ]);
+      const open = (incRes?.incidents || [])[0] || null;
+      const fault = faultRes?.has_fault ? faultRes.fault : null;
+      // The episode carries its own station: the banner and Recover must
+      // target the station the episode belongs to, never whichever
+      // station the selector happens to show.
+      setActiveEpisode(open || fault ? { incident: open, fault, stationId } : null);
+    } catch (e) {
+      // Leave the previous episode state: a failed refresh must not
+      // hide a Recover button that was visible a moment ago.
+    }
+  };
+
+  React.useEffect(() => {
+    if (selectedStation) refreshEpisode(selectedStation);
+  }, [selectedStation]);
+
+  React.useEffect(() => {
+    if (selectedStation) saveFaultLabStation(window.localStorage, selectedStation);
+  }, [selectedStation]);
 
   const isOperator = role === 'station_operator' || role === 'STATION_OPERATOR';
 
@@ -141,13 +229,18 @@ export const FaultLab = () => {
     // The inject endpoint only records an active_fault row; the pipeline
     // scores readings, so send the faulted readings through the telemetry
     // batch endpoint. That is what produces a visible model decision.
-    const station = stations.find(s => s.id === selectedStation) || {};
-    const base = {
-      temp: station.sensors?.temperature?.value ?? 25.0,
-      hum: station.sensors?.humidity?.value ?? 60,
-      pres: station.sensors?.pressure?.value ?? 1010,
-      battery: station.battery ?? 12.6,
-    };
+    // Finding A: build every fault frame from the CLEAN BASELINE captured
+    // before the first inject of this episode — never from the live
+    // sensors, which already carry the previous inject's offset (the
+    // spiked frame becomes the live temperature, so a second SPIKE used
+    // to stack +8.5 C onto +8.5 C, walking the station to 104.1 C).
+    // The baseline is stored per station in localStorage and is only
+    // cleared when the fault is recovered or reset.
+    let base = getFaultBaseline(window.localStorage, selectedStation);
+    if (!base) {
+      base = await fetchLiveBase(selectedStation);
+      saveFaultBaseline(window.localStorage, selectedStation, base);
+    }
     const frames = buildFaultFrames(selectedFault, base);
     const rows = frames.map(f => ({
       timestamp: new Date(Date.now() - f.minutesAgo * 60000).toISOString(),
@@ -160,6 +253,14 @@ export const FaultLab = () => {
       rain: 0,
     }));
     setSendState({ phase: 'sending', frames: rows.length });
+    // Incidents already open before this inject: without them, two rapid
+    // injects land inside the match grace and the first inject's
+    // incident reads as "decided" a second time instead of "merged".
+    let knownOpenIds = [];
+    try {
+      const before = await apiClient.getIncidents(selectedStation, 'open');
+      knownOpenIds = (before?.incidents || []).map(i => i.id);
+    } catch (e) { /* classify falls back to timestamps alone */ }
     let sent;
     try {
       sent = await apiClient.replayTelemetryBatch(selectedStation, rows);
@@ -170,37 +271,64 @@ export const FaultLab = () => {
     }
     const accepted = sent?.accepted ?? 0;
     setSendState({ phase: 'waiting', frames: rows.length, accepted });
-    // Poll the incident queue for a fresh open incident on this station.
+    // Poll the incident queue for what the pipeline did with the
+    // faulted readings. Finding C: the pipeline UPDATES an already-open
+    // incident for the same station+variable instead of creating a new
+    // one, so "no fresh incident" does not mean "scored normal" — check
+    // whether an open incident was just updated (merged) before saying
+    // the readings scored within normal bounds.
     for (let attempt = 0; attempt < 6; attempt += 1) {
       await new Promise(r => setTimeout(r, 2000));
       try {
         const res = await apiClient.getIncidents(selectedStation, 'open');
-        const fresh = (res?.incidents || []).find(i => new Date(i.created_at || 0).getTime() >= startedAt - 5000);
-        if (fresh) {
-          setSendState({ phase: 'decided', incident: fresh, frames: rows.length, accepted });
+        const result = classifyInjectionResult(res?.incidents, startedAt, undefined, knownOpenIds);
+        if (result.kind === 'decided') {
+          setSendState({ phase: 'decided', incident: result.incident, frames: rows.length, accepted });
           tacticalAudio.playSuccess();
           setIsInjecting(false);
+          await refreshEpisode(selectedStation);
+          return;
+        }
+        if (result.kind === 'merged') {
+          setSendState({ phase: 'merged', incident: result.incident, frames: rows.length, accepted });
+          tacticalAudio.playSuccess();
+          setIsInjecting(false);
+          await refreshEpisode(selectedStation);
           return;
         }
       } catch (e) { /* keep polling */ }
     }
     setSendState({ phase: 'no-incident', frames: rows.length, accepted });
     setIsInjecting(false);
+    await refreshEpisode(selectedStation);
   };
 
   // Recovery: three jittered normal frames — three consecutive normal
-  // readings auto-resolve an open incident (runbook §5c).
+  // readings auto-resolve an open incident (runbook §5c). Finding B:
+  // the frames are built from the CLEAN BASELINE captured at inject
+  // time, not from the live sensors: after a spike the live temperature
+  // IS the spiked temperature, so "live ± 0.2 C" frames stayed hot and
+  // SUSPECT and the incident never resolved.
+  //
+  // Two more things the live run caught:
+  // - The frames go to the EPISODE's station, not the selector's: after
+  //   navigating away and back the selector used to reset to AWS-01 and
+  //   the recover then "fixed" AWS-01 (whose seeded incident was open)
+  //   while the AWS-02 incident stayed open.
+  // - All three frames are timestamped now / now+1s / now+2s. The
+  //   pipeline only counts a normal reading toward the auto-resolve
+  //   streak when its timestamp is newer than the last processed
+  //   reading, so the old now-2m / now-1m / now stamps left the first
+  //   frame older than the spike and the streak stalled at 2 of 3.
+  // - The fault clear is station-scoped: the old no-argument call ran
+  //   the fleet reset, which DELETED every open incident in the fleet
+  //   instead of letting this station's incident resolve on the frames.
   const handleRecover = async () => {
-    const station = stations.find(s => s.id === selectedStation) || {};
-    const base = {
-      temp: station.sensors?.temperature?.value ?? 25.0,
-      hum: station.sensors?.humidity?.value ?? 60,
-      pres: station.sensors?.pressure?.value ?? 1010,
-      battery: station.battery ?? 12.6,
-    };
+    const targetStation = activeEpisode?.stationId || selectedStation;
+    const base = getFaultBaseline(window.localStorage, targetStation) || await fetchLiveBase(targetStation);
     const jitters = [[0.1, 0.5, 0.1], [-0.2, -1, -0.2], [0.2, 1, 0.15]];
     const rows = jitters.map(([dt, dh, dp], i) => ({
-      timestamp: new Date(Date.now() - (2 - i) * 60000).toISOString(),
+      timestamp: new Date(Date.now() + i * 1000).toISOString(),
       temp: +(base.temp + dt).toFixed(2),
       hum: +(base.hum + dh).toFixed(2),
       pres: +(base.pres + dp).toFixed(2),
@@ -211,11 +339,15 @@ export const FaultLab = () => {
     }));
     setSendState({ phase: 'recovering' });
     try {
-      await apiClient.replayTelemetryBatch(selectedStation, rows);
-      await clearFaults();
+      await apiClient.replayTelemetryBatch(targetStation, rows);
+      await clearFaults(targetStation);
+      // The episode is over: forget the baseline so the next inject
+      // captures a fresh clean one from the (now normal) live sensors.
+      clearFaultBaseline(window.localStorage, targetStation);
       setLastInjected(null);
       setSendState({ phase: 'recovered' });
       tacticalAudio.playSuccess();
+      await refreshEpisode(targetStation);
     } catch (e) {
       setSendState({ phase: 'error', message: `Recovery frames were rejected: ${e.message}` });
     }
@@ -224,8 +356,10 @@ export const FaultLab = () => {
   const handleReset = () => {
     tacticalAudio.playClick();
     clearFaults();
+    clearAllFaultBaselines(window.localStorage);
     setLastInjected(null);
     setSendState(null);
+    setActiveEpisode(null);
     tacticalAudio.playSuccess();
   };
 
@@ -265,6 +399,30 @@ export const FaultLab = () => {
             </div>
           )}
         </div>
+
+        {/* Active fault episode for the selected station, from the
+            backend — shown whenever an incident is open or a fault is
+            recorded, even after navigating away and back (finding B).
+            The Recover button lives here as well as in the injection
+            result, so it never disappears with local component state. */}
+        {activeEpisode && (
+          <div style={{ background: 'rgba(169,32,38,0.12)', border: '1px solid var(--neon-crimson)', borderRadius: '6px', padding: '10px 14px', marginBottom: '16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '10px' }}>
+            <div style={{ fontSize: '0.76rem', color: 'var(--text-primary)', lineHeight: 1.45 }}>
+              <i className="fa-solid fa-triangle-exclamation" style={{ color: 'var(--neon-crimson)' }}></i>{' '}
+              Active episode on <strong>{activeEpisode.stationId}</strong>
+              {activeEpisode.incident ? (
+                <> — open incident <span style={{ textTransform: 'none', fontFamily: 'var(--font-mono)' }}>{activeEpisode.incident.id}</span></>
+              ) : null}
+              {activeEpisode.fault ? (
+                <> — fault <strong>{activeEpisode.fault.fault_type}</strong> recorded</>
+              ) : null}
+              . Send normal frames to recover.
+            </div>
+            <button className="cyber-btn btn-sm" onClick={handleRecover} style={{ fontSize: '0.74rem' }}>
+              <i className="fa-solid fa-heart-pulse"></i> Send 3 Normal Frames to Recover
+            </button>
+          </div>
+        )}
 
         {/* Step 2: Choose Fault */}
         <div style={{ fontFamily: 'var(--font-tactical)', fontSize: '0.78rem', color: 'var(--text-muted)', marginBottom: '10px' }}>
@@ -362,7 +520,37 @@ export const FaultLab = () => {
                 )}
                 <div style={{ display: 'flex', gap: '8px', marginTop: '12px', flexWrap: 'wrap' }}>
                   <button className="cyber-btn btn-sm btn-primary" onClick={() => setCurrentView('incidents')}>
-                    <i className="fa-solid fa-microscope"></i> Review Incident {sendState.incident.id}
+                    {/* Finding F: the id must render exactly as stored
+                        (lower-case hex). .cyber-btn upper-cases its text,
+                        so the id rides in a span that opts out — the
+                        table renders it lower-case, and a direct GET with
+                        the displayed id must not 404. */}
+                    <i className="fa-solid fa-microscope"></i> Review Incident <span style={{ textTransform: 'none' }}>{sendState.incident.id}</span>
+                  </button>
+                  <button className="cyber-btn btn-sm" onClick={handleRecover}>
+                    <i className="fa-solid fa-heart-pulse"></i> Send 3 Normal Frames to Recover
+                  </button>
+                </div>
+              </div>
+            )}
+            {sendState.phase === 'merged' && sendState.incident && (
+              <div>
+                <div style={{ fontFamily: 'var(--font-tactical)', fontSize: '0.9rem', fontWeight: 800, color: 'var(--neon-amber)' }}>
+                  MERGED INTO OPEN INCIDENT
+                </div>
+                <div style={{ fontSize: '0.8rem', color: 'var(--text-primary)', lineHeight: 1.45, marginTop: '4px' }}>
+                  The faulted readings were scored by the pipeline and folded into the already-open incident{' '}
+                  <span style={{ textTransform: 'none', fontFamily: 'var(--font-mono)' }}>{sendState.incident.id}</span>{' '}
+                  instead of opening a duplicate — that incident was just updated.
+                </div>
+                {sendState.incident.reasoning?.headline && (
+                  <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', lineHeight: 1.45, marginTop: '4px' }}>
+                    {sendState.incident.reasoning.headline}
+                  </div>
+                )}
+                <div style={{ display: 'flex', gap: '8px', marginTop: '12px', flexWrap: 'wrap' }}>
+                  <button className="cyber-btn btn-sm btn-primary" onClick={() => setCurrentView('incidents')}>
+                    <i className="fa-solid fa-microscope"></i> Review Incident <span style={{ textTransform: 'none' }}>{sendState.incident.id}</span>
                   </button>
                   <button className="cyber-btn btn-sm" onClick={handleRecover}>
                     <i className="fa-solid fa-heart-pulse"></i> Send 3 Normal Frames to Recover

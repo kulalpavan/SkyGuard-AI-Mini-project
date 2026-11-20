@@ -46,7 +46,7 @@ export const StationUpload = () => {
   const [apiFeedback, setApiFeedback] = useState('');
   const activePollId = React.useRef(null);
 
-  // Fetch Cloud PostgreSQL telemetry statistics and training jobs on station change
+  // Fetch SQLite telemetry statistics and training jobs on station change
   const refreshStationStats = async (stId) => {
     if (!session?.isAuthenticated) return;
 
@@ -264,7 +264,7 @@ export const StationUpload = () => {
         setUploadedFileName(file.name);
         setActiveTableSource('uploaded');
 
-        // 2. Ingest to Cloud PostgreSQL via Backend API
+        // 2. Ingest to SQLite via Backend API
         try {
           const uploadRes = await apiClient.uploadStationTelemetry(activeStationId, file);
           setUploadFeedback({
@@ -286,7 +286,7 @@ export const StationUpload = () => {
           console.warn("[StationUpload] Cloud DB upload warning:", apiErr.message);
           setUploadFeedback({
             success: false,
-            message: `Cloud PostgreSQL Ingestion Notice: ${apiErr.message}. Local preview available.`
+            message: `SQLite Ingestion Notice: ${apiErr.message}. Local preview available.`
           });
           tacticalAudio.playAlarm();
         }
@@ -508,7 +508,7 @@ export const StationUpload = () => {
         </div>
 
         <div className="cyber-card-body">
-          {/* Station Overview & PostgreSQL Telemetry Status Grid */}
+          {/* Station Overview & SQLite Telemetry Status Grid */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '10px', marginBottom: '14px' }}>
             <div style={{ background: 'rgba(10,15,29,0.8)', border: '1px solid var(--border-subtle)', borderRadius: '4px', padding: '10px 14px' }}>
               <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>
@@ -530,7 +530,7 @@ export const StationUpload = () => {
                 {(dbStats.total_records || 0).toLocaleString()}
               </div>
               <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>
-                {dbStats.latest_timestamp ? `Synced: ${new Date(dbStats.latest_timestamp).toLocaleDateString()}` : "PostgreSQL"}
+                {dbStats.latest_timestamp ? `Synced: ${new Date(dbStats.latest_timestamp).toLocaleDateString()}` : "SQLite"}
               </div>
             </div>
 
@@ -573,7 +573,7 @@ export const StationUpload = () => {
                   <div style={{ fontFamily: 'var(--font-tactical)', fontSize: '0.82rem', color: 'var(--neon-green)', fontWeight: 800 }}>
                     <i className="fa-solid fa-file-arrow-up"></i> UPLOAD HISTORICAL TELEMETRY
                   </div>
-                  <span className="cyber-badge badge-green" style={{ fontSize: '0.62rem' }}>POSTGRESQL</span>
+                  <span className="cyber-badge badge-green" style={{ fontSize: '0.62rem' }}>SQLITE</span>
                 </div>
 
                 {/* File Drop & Browse Area */}
@@ -788,10 +788,10 @@ export const StationUpload = () => {
                   ? `UPLOADED OBSERVATION FRAMES (${uploadedDataset.length} ROWS — INGESTED)`
                   : activeTableSource === 'openmeteo'
                   ? `OPEN-METEO 7-DAY HISTORY (${openMeteoHistory.length} ROWS — CLIMATOLOGY BASELINE)`
-                  : `CLOUD POSTGRESQL TELEMETRY REPOSITORY (${(dbStats.total_records || 0).toLocaleString()} RECORDS AVAILABLE)`}
+                  : `SQLITE TELEMETRY REPOSITORY (${(dbStats.total_records || 0).toLocaleString()} RECORDS AVAILABLE)`}
               </div>
               <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
-                Target Feature Vector (8-D): <code>[temp, hum, pres, wind, lag_diff, sin_hr, cos_hr, dew_pt]</code>
+                Target Feature Vector (12-D): <code>[z_T, z_H, z_P, dz_T, dz_H, dz_P, z_dpd, p_elev_resid, var3, persist, z_T_lag1, hour_phase]</code>
               </div>
             </div>
 

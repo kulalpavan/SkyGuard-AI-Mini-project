@@ -277,7 +277,7 @@ export const ModelGovernance = () => {
                     <span className="cyber-badge badge-offline">{activeModel.version || "v1.0"}</span>
                   </div>
                   <div style={{ fontSize: '0.74rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', marginTop: '4px' }}>
-                    Trained for {selectedStation.name} | Stored in Cloud PostgreSQL Model Registry
+                    Trained for {selectedStation.name} | Stored in SQLite Model Registry
                   </div>
                 </div>
                 <div style={{ fontFamily: 'var(--font-mono)', fontSize: '0.7rem', color: 'var(--text-muted)', background: 'rgba(5,8,17,0.7)', padding: '6px 10px', borderRadius: '4px', border: '1px solid var(--border-subtle)' }}>
@@ -322,11 +322,15 @@ export const ModelGovernance = () => {
                   <div style={{ fontFamily: 'var(--font-tactical)', fontSize: '0.78rem', color: 'var(--neon-green)', fontWeight: 700, marginBottom: '8px' }}>
                     <i className="fa-solid fa-chart-column"></i> VALIDATION METRICS
                   </div>
+                  {/* Chronological Validation Metrics. No invented
+                      fallbacks: when the artifact carries no measured
+                      validation numbers, show "—" instead of the old
+                      hardcoded percentages (finding E). */}
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', fontFamily: 'var(--font-mono)', fontSize: '0.75rem' }}>
-                    <div>Event Precision: <strong style={{ color: 'var(--neon-green)' }}>{activeModel.metrics?.event_precision || "95.4%"}</strong></div>
-                    <div>Event Recall: <strong style={{ color: 'var(--neon-green)' }}>{activeModel.metrics?.event_recall || "96.8%"}</strong></div>
-                    <div>False Alerts: <strong style={{ color: 'var(--neon-cyan)' }}>{activeModel.metrics?.false_alerts_per_day || "0.12/day"}</strong></div>
-                    <div>Detection Delay: <strong style={{ color: 'var(--text-primary)' }}>{activeModel.metrics?.detection_delay || "1.1 cycles"}</strong></div>
+                    <div>Event Precision: <strong style={{ color: 'var(--neon-green)' }}>{activeModel.metrics?.event_precision ?? "—"}</strong></div>
+                    <div>Event Recall: <strong style={{ color: 'var(--neon-green)' }}>{activeModel.metrics?.event_recall ?? "—"}</strong></div>
+                    <div>False Alerts: <strong style={{ color: 'var(--neon-cyan)' }}>{activeModel.metrics?.false_alerts_per_day ?? "—"}</strong></div>
+                    <div>Detection Delay: <strong style={{ color: 'var(--text-primary)' }}>{activeModel.metrics?.detection_delay ?? "—"}</strong></div>
                   </div>
                 </div>
               </div>
@@ -334,18 +338,22 @@ export const ModelGovernance = () => {
               {/* Versioned Feature Definitions */}
               <div style={{ marginTop: '14px', background: 'rgba(10,15,29,0.6)', border: '1px solid var(--border-subtle)', padding: '14px', borderRadius: '4px' }}>
                 <div style={{ fontFamily: 'var(--font-tactical)', fontSize: '0.78rem', color: 'var(--neon-purple)', fontWeight: 700, marginBottom: '8px' }}>
-                  <i className="fa-solid fa-layer-group"></i> 8-DIMENSIONAL FEATURES CALIBRATED FOR {selectedStation.id}
+                  <i className="fa-solid fa-layer-group"></i> 12-DIMENSIONAL FEATURES CALIBRATED FOR {selectedStation.id}
                 </div>
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
                   {(activeModel.training_summary?.features || [
-                    "temperature_norm",
-                    "humidity_norm",
-                    "pressure_norm",
-                    "wind_speed_norm",
-                    "temp_diff_lag",
-                    "diurnal_hour_sin",
-                    "diurnal_hour_cos",
-                    "dew_point_depr_norm"
+                    "z_T",
+                    "z_H",
+                    "z_P",
+                    "dz_T",
+                    "dz_H",
+                    "dz_P",
+                    "z_dpd",
+                    "p_elev_resid",
+                    "var3",
+                    "persist",
+                    "z_T_lag1",
+                    "hour_phase"
                   ]).map((feat, idx) => (
                     <span key={idx} className="cyber-badge badge-normal" style={{ fontSize: '0.7rem' }}>
                       {feat}
@@ -367,7 +375,7 @@ export const ModelGovernance = () => {
           <div className="cyber-card-title">
             <i className="fa-solid fa-clock-rotate-left text-green"></i> {selectedStation.id} MODEL VERSION REGISTRY & ROLLBACK CONTROLS
           </div>
-          <span className="cyber-badge badge-normal">POSTGRESQL MODEL_REGISTRY</span>
+          <span className="cyber-badge badge-normal">SQLITE MODEL_REGISTRY</span>
         </div>
         <div className="cyber-card-body" style={{ padding: 0 }}>
           <div className="tactical-table-wrapper">

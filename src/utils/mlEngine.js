@@ -349,13 +349,16 @@ export class StationAdaptiveMLPipeline {
         mean_baseline_score: +meanScore.toFixed(3)
       },
       normalization_stats: stats,
+      // Validation metrics are NOT measured by this browser-side engine:
+      // they stay null so no caller can display invented precision /
+      // recall numbers as if they were measured (finding E).
       metrics: {
-        event_precision: "95.4%",
-        event_recall: "96.8%",
-        false_alerts_per_day: "0.12 / station-day",
-        detection_delay: "1.1 cycles (3.3 min)",
-        calibration_brier: "0.034",
-        explanation_completeness: "100%"
+        event_precision: null,
+        event_recall: null,
+        false_alerts_per_day: null,
+        detection_delay: null,
+        calibration_brier: null,
+        explanation_completeness: null
       }
     };
 

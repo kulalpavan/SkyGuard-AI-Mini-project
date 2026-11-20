@@ -248,7 +248,7 @@ export const AuthProvider = ({ children }) => {
   };
 
   /**
-   * Edit Station Details in SQLite/PostgreSQL Database
+   * Edit Station Details in SQLite Database
    */
   const editStationCredential = async (stationId, updateData) => {
     if (session.role !== 'admin' && session.role !== 'CENTRAL_ADMIN') {

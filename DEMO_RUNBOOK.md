@@ -305,8 +305,18 @@ banner sits at the top of the view, above the raw scores and evidence.
   **What to do next** with the recommended action and a **Review Incident**
   button. If the faulted readings score within normal bounds, the panel
   says so honestly ("No incident was raised…") instead of inventing one.
-  A **Send 3 Normal Frames to Recover** button sends the §5c recovery
-  frames in one click.
+  Injecting the same fault twice re-applies the same offset from the
+  clean baseline captured before the first inject — the temperature does
+  NOT stack (a second SPIKE reads the same ~+8.5 °C, not +17 °C) — and
+  the second inject reports **MERGED INTO OPEN INCIDENT** when the
+  readings fold into the already-open incident instead of opening a
+  duplicate. A **Send 3 Normal Frames to Recover** button sends the §5c
+  recovery frames in one click: the frames are built from the station's
+  own recent readings (not the spiked live values), so they read NORMAL
+  and the incident auto-resolves to `resolved`. The recover button lives
+  on an episode banner driven by the backend, so it survives navigating
+  away from Fault Lab and back — and it always recovers the episode's
+  own station, never another station's open incident.
 - **Incident Triage (sidebar).** The sidebar's **Incident Triage** nav item
   shows a red badge with the open-incident count, and the **Fleet Status**
   panel underneath it lists stations needing attention and each station's
