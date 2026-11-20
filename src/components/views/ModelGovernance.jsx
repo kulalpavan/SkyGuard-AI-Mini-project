@@ -3,6 +3,7 @@ import { useAuth } from '../../context/AuthContext';
 import { useWeather } from '../../context/WeatherContext';
 import { apiClient } from '../../utils/apiClient';
 import { tacticalAudio } from '../../utils/audio';
+import { TrainingProgress, parseCompletedStages } from '../TrainingProgress';
 
 export const ModelGovernance = () => {
   const { role, assignedStationId } = useAuth();
@@ -15,6 +16,8 @@ export const ModelGovernance = () => {
   const [dbModels, setDbModels] = useState([]);
   const [isLoadingModels, setIsLoadingModels] = useState(false);
   const [rollbackStatus, setRollbackStatus] = useState('');
+  const [trainingJob, setTrainingJob] = useState(null);
+  const [trainingJobStartedAt, setTrainingJobStartedAt] = useState(null);
 
   const selectedStation = stations.find(s => s.id === selectedStationId) || stations[0] || {};
   const stationModelEntry = activeStationModels[selectedStationId];
@@ -38,6 +41,80 @@ export const ModelGovernance = () => {
     if (selectedStationId) {
       fetchStationModels(selectedStationId);
     }
+  }, [selectedStationId]);
+
+  // Live training progress for the selected station: the latest job is shown
+  // (running jobs are polled every second until they finish, so the phases
+  // advance here exactly as they do in the Training Studio). A finished job
+  // stays visible with its outcome until the next training run.
+  useEffect(() => {
+    if (!selectedStationId) return undefined;
+    let cancelled = false;
+    let interval = null;
+
+    const toJobState = (j) => {
+      const completed = parseCompletedStages(j.completed_stages);
+      return {
+        job_id: j.id,
+        status: j.status,
+        current_stage: j.current_stage,
+        completed_stages: completed,
+        progress: j.status === 'COMPLETED' ? 100 : Math.round((completed.length / 8) * 100),
+        error_message: j.error_message,
+        started_at: j.started_at,
+        completed_at: j.completed_at,
+        model_version: j.model_version,
+      };
+    };
+
+    const start = async () => {
+      try {
+        const res = await apiClient.getStationTrainingJobs(selectedStationId);
+        if (cancelled || !res?.success) return;
+        const jobs = res.jobs || [];
+        const running = jobs.find(j => j.status === 'RUNNING');
+        const latest = running || jobs[0] || null;
+        if (!latest) {
+          setTrainingJob(null);
+          return;
+        }
+        setTrainingJob(toJobState(latest));
+        setTrainingJobStartedAt(latest.started_at || null);
+        if (!running) return;
+        const runningId = running.id;
+        interval = setInterval(async () => {
+          try {
+            const s = await apiClient.getTrainingJobStatus(selectedStationId, runningId);
+            if (cancelled) return;
+            setTrainingJob({
+              job_id: s.job_id || runningId,
+              status: s.status,
+              current_stage: s.current_stage,
+              completed_stages: parseCompletedStages(s.completed_stages),
+              progress: s.progress,
+              error_message: s.error_message,
+              started_at: s.started_at,
+              completed_at: s.completed_at,
+              model_version: s.model_version,
+            });
+            if (s.started_at) setTrainingJobStartedAt(s.started_at);
+            if (s.status !== 'RUNNING') {
+              clearInterval(interval);
+              fetchStationModels(selectedStationId);
+            }
+          } catch (e) {
+            console.warn("[ModelGovernance] Training poll failed:", e.message);
+          }
+        }, 1000);
+      } catch (e) {
+        console.warn("[ModelGovernance] Failed to fetch training jobs:", e.message);
+      }
+    };
+    start();
+    return () => {
+      cancelled = true;
+      if (interval) clearInterval(interval);
+    };
   }, [selectedStationId]);
 
   const handleDownloadModelCard = (model) => {
@@ -133,6 +210,11 @@ export const ModelGovernance = () => {
         </div>
       )}
 
+      {/* Live training progress — same phases as the Training Studio */}
+      {trainingJob && (
+        <TrainingProgress job={trainingJob} stationId={selectedStationId} startedAt={trainingJobStartedAt} />
+      )}
+
       {/* Selected Station Model Card */}
       <div className="cyber-card">
         <div className="cyber-card-header">
@@ -146,7 +228,7 @@ export const ModelGovernance = () => {
                   <i className="fa-solid fa-download"></i> Export Model Card (JSON)
                 </button>
                 <button className="cyber-btn btn-sm btn-primary" onClick={() => setCurrentView('station-upload')}>
-                  <i className="fa-solid fa-cloud-arrow-up"></i> Train New Version
+                  <i className="fa-solid fa-cloud-arrow-up"></i> {trainingJob?.status === 'RUNNING' ? 'Training in progress — View' : 'Train New Version'}
                 </button>
               </>
             )}

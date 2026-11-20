@@ -3,17 +3,7 @@ import { useAuth } from '../../context/AuthContext';
 import { useWeather } from '../../context/WeatherContext';
 import { apiClient } from '../../utils/apiClient';
 import { tacticalAudio } from '../../utils/audio';
-
-const PIPELINE_STEPS = [
-  { label: "Data Ingested", desc: "Cloud PostgreSQL telemetry verified" },
-  { label: "Data Validated", desc: "Physical plausibility & sanity checks" },
-  { label: "Data Preprocessed", desc: "Scrubbed -999 flags & sensor errors" },
-  { label: "Features Generated", desc: "12-feature causal station vector" },
-  { label: "Training Isolation Forest", desc: "Fitting ensemble isolation trees from scratch" },
-  { label: "Model Evaluation", desc: "Calibrating dynamic threshold & contamination" },
-  { label: "Model Registered", desc: "Candidate saved for activation checks" },
-  { label: "Model Activated", desc: "Ready for live real-time scoring" }
-];
+import { TrainingProgress, TRAINING_STEPS, parseCompletedStages } from '../TrainingProgress';
 
 export const StationUpload = () => {
   const { role, assignedStationId, session } = useAuth();
@@ -48,6 +38,7 @@ export const StationUpload = () => {
 
   const [pipelineState, setPipelineState] = useState('IDLE'); // IDLE, TRAINING, COMPLETED, ERROR
   const [activeJobState, setActiveJobState] = useState(null);
+  const [jobStartedAt, setJobStartedAt] = useState(null);
   const [trainedResult, setTrainedResult] = useState(null);
   const [errorMessage, setErrorMessage] = useState('');
   const [uploadFeedback, setUploadFeedback] = useState(null);
@@ -79,9 +70,8 @@ export const StationUpload = () => {
         const runningJob = jobs.find(j => j.status === 'RUNNING');
         if (runningJob) {
           setPipelineState('TRAINING');
-          const completed = Array.isArray(runningJob.completed_stages)
-            ? runningJob.completed_stages
-            : (typeof runningJob.completed_stages === 'string' ? JSON.parse(runningJob.completed_stages || '[]') : []);
+          const completed = parseCompletedStages(runningJob.completed_stages);
+          setJobStartedAt(runningJob.started_at || null);
           setActiveJobState({
             job_id: runningJob.id,
             status: 'RUNNING',
@@ -93,14 +83,13 @@ export const StationUpload = () => {
           const latestJob = jobs[0];
           if (latestJob.status === 'COMPLETED') {
             setPipelineState('COMPLETED');
-            const completed = Array.isArray(latestJob.completed_stages)
-              ? latestJob.completed_stages
-              : (typeof latestJob.completed_stages === 'string' ? JSON.parse(latestJob.completed_stages || '[]') : []);
+            const completed = parseCompletedStages(latestJob.completed_stages);
+            setJobStartedAt(latestJob.started_at || null);
             setActiveJobState({
               job_id: latestJob.id,
               status: 'COMPLETED',
               current_stage: 'Model Activated',
-              completed_stages: completed.length === 8 ? completed : PIPELINE_STEPS.map(s => s.label)
+              completed_stages: completed.length === 8 ? completed : TRAINING_STEPS.map(s => s.label)
             });
             try {
               const activeRes = await apiClient.getStationActiveModel(stId);
@@ -110,6 +99,21 @@ export const StationUpload = () => {
             } catch (err) {
               console.warn("Failed to fetch active model for completed job:", err);
             }
+          } else if (latestJob.status === 'FAILED') {
+            // Surface the last failure (with the backend's real reason)
+            // instead of hiding it until the next training attempt.
+            setPipelineState('ERROR');
+            setJobStartedAt(latestJob.started_at || null);
+            setActiveJobState({
+              job_id: latestJob.id,
+              status: 'FAILED',
+              current_stage: latestJob.current_stage,
+              completed_stages: parseCompletedStages(latestJob.completed_stages),
+              error_message: latestJob.error_message,
+              started_at: latestJob.started_at,
+              completed_at: latestJob.completed_at,
+              model_version: latestJob.model_version,
+            });
           }
         }
       }
@@ -173,6 +177,7 @@ export const StationUpload = () => {
     setActiveTableSource('none');
     setPipelineState('IDLE');
     setActiveJobState(null);
+    setJobStartedAt(null);
     setTrainedResult(null);
     setErrorMessage('');
     setUploadFeedback(null);
@@ -326,16 +331,14 @@ export const StationUpload = () => {
 
         if (statusRes && (statusRes.success || statusRes.status)) {
           jobStatus = statusRes.status;
-          const completed = Array.isArray(statusRes.completed_stages)
-            ? statusRes.completed_stages
-            : (typeof statusRes.completed_stages === 'string' ? JSON.parse(statusRes.completed_stages || '[]') : []);
+          const completed = parseCompletedStages(statusRes.completed_stages);
 
           // Always normalize COMPLETED state so stage never reads stale 'Data Ingested'
           const resolvedStage = jobStatus === "COMPLETED"
             ? "Model Activated"
             : statusRes.current_stage;
           const resolvedCompleted = jobStatus === "COMPLETED" && completed.length < 8
-            ? ["Data Ingested","Data Validated","Data Preprocessed","Features Generated","Training Isolation Forest","Model Evaluation","Model Registered","Model Activated"]
+            ? TRAINING_STEPS.map(s => s.label)
             : completed;
 
           setActiveJobState({
@@ -344,7 +347,10 @@ export const StationUpload = () => {
             current_stage: resolvedStage,
             completed_stages: resolvedCompleted,
             progress: jobStatus === "COMPLETED" ? 100 : statusRes.progress,
-            error_message: statusRes.error_message
+            error_message: statusRes.error_message,
+            started_at: statusRes.started_at,
+            completed_at: statusRes.completed_at,
+            model_version: statusRes.model_version
           });
 
           if (jobStatus === "COMPLETED") {
@@ -417,6 +423,7 @@ export const StationUpload = () => {
 
     setPipelineState('TRAINING');
     setErrorMessage('');
+    setJobStartedAt(Date.now());
     // Initialize state properly, don't wipe immediately if already rendering
     setActiveJobState(prev => ({ status: "RUNNING", current_stage: "Data Ingested", completed_stages: [] }));
 
@@ -430,7 +437,34 @@ export const StationUpload = () => {
       
       pollTrainingJob(activeStationId, res.job_id);
     } catch (err) {
-      setErrorMessage(err.message || "Training pipeline execution failed.");
+      const msg = err.message || "Training pipeline execution failed.";
+      if (msg.includes('TRAINING_ALREADY_RUNNING')) {
+        // The backend allows one running job per station (partial unique
+        // index). Attach to the running job and show its live progress
+        // instead of failing — clicking Train twice must not error out.
+        try {
+          const jobsRes = await apiClient.getStationTrainingJobs(activeStationId);
+          const running = (jobsRes?.jobs || []).find(j => j.status === 'RUNNING');
+          if (running) {
+            setPipelineState('TRAINING');
+            setErrorMessage('');
+            setJobStartedAt(running.started_at || null);
+            setActiveJobState({
+              job_id: running.id,
+              status: 'RUNNING',
+              current_stage: running.current_stage,
+              completed_stages: parseCompletedStages(running.completed_stages),
+              started_at: running.started_at,
+              model_version: running.model_version,
+            });
+            pollTrainingJob(activeStationId, running.id);
+            return;
+          }
+        } catch (attachErr) {
+          console.warn("[StationUpload] Could not attach to running job:", attachErr.message);
+        }
+      }
+      setErrorMessage(msg);
       setPipelineState('ERROR');
       tacticalAudio.playAlarm();
     }
@@ -663,19 +697,9 @@ export const StationUpload = () => {
           </div>
 
 
-          {/* Active Training Status Indicator */}
-          {pipelineState === 'TRAINING' && (
-            <div style={{ background: 'rgba(5,8,17,0.9)', border: '1px solid var(--neon-cyan)', borderRadius: '6px', padding: '16px', marginBottom: '16px', display: 'flex', alignItems: 'center', gap: '12px' }}>
-              <i className="fa-solid fa-circle-notch fa-spin" style={{ color: 'var(--neon-cyan)', fontSize: '1.25rem' }}></i>
-              <div>
-                <div style={{ fontFamily: 'var(--font-tactical)', fontSize: '0.85rem', color: 'var(--neon-cyan)', fontWeight: 800 }}>
-                  STATION-ADAPTIVE MODEL TRAINING UNDERWAY ({activeStationId})
-                </div>
-                <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', marginTop: '2px' }}>
-                  Processing dataset... Current phase: <strong style={{ color: 'var(--text-primary)' }}>{activeJobState?.current_stage || "Initializing"}</strong>
-                </div>
-              </div>
-            </div>
+          {/* Live phase-by-phase training progress (shared with Model Governance) */}
+          {activeJobState && (pipelineState === 'TRAINING' || pipelineState === 'COMPLETED' || activeJobState.status === 'FAILED') && (
+            <TrainingProgress job={activeJobState} stationId={activeStationId} startedAt={jobStartedAt} />
           )}
 
           {/* Success Result Certificate */}
@@ -703,8 +727,10 @@ export const StationUpload = () => {
             </div>
           )}
 
-          {/* Error Box */}
-          {pipelineState === 'ERROR' && (
+          {/* Error Box — only for errors with no training job (pre-flight,
+              access, connection). A failed job reports its own reason inside
+              the progress card above, so it is not repeated here. */}
+          {pipelineState === 'ERROR' && activeJobState?.status !== 'FAILED' && (
             <div style={{ background: 'rgba(255,0,85,0.08)', border: '1px solid var(--neon-crimson)', borderRadius: '6px', padding: '12px', color: 'var(--neon-crimson)', fontSize: '0.78rem', marginBottom: '16px' }}>
               <i className="fa-solid fa-triangle-exclamation"></i> <strong>Training Execution Blocked:</strong> {errorMessage}
             </div>

@@ -373,7 +373,17 @@ curl -s -X POST http://127.0.0.1:8000/api/v1/stations/AWS-02/train \
 # {"success": true, "job_id": 1, "station_id": "AWS-02", ...}
 ```
 
-The training runs in the background (~1 min). Poll until it completes:
+The training runs in the background. Measured on the demo machine with
+2,617 backfilled rows: first training **~3–4 s** end to end, retraining
+with an incumbent model **~4 s** (a retrain used to take ~28 s because
+the incumbent-agreement check re-loaded the model artifact and ran SHAP
+for every holdout row; it now loads the artifact once and scores
+directly — same decisions, verified identical metrics). Per-phase
+breakdown of a retrain: history fetch 0.03 s, climatology + scrubbing
+1.8 s, feature generation 0.6 s, forest fit 0.5 s, evaluation 0.4 s,
+registration + activation 0.1 s. Udupi fails honestly in ~3–4 s (see
+M2b). To check the job from the terminal instead of the UI, poll its
+status until it completes:
 
 ```bash
 curl -s -H "Authorization: Bearer $TOKEN" \
@@ -385,6 +395,42 @@ curl -s -H "Authorization: Bearer $TOKEN" \
 
 (Replace `1` with the `job_id` from the train response.) If the
 status is `FAILED`, read `error_message` — on this data it completes.
+
+### M2b. What the audience sees while training runs (live progress)
+
+Do this from the UI, not curl: **Station Training Studio → select the
+station → Train Model**. A "TRAINING PIPELINE" card appears under the
+upload box and shows the eight phases with a live state each — DONE
+(green tick), IN PROGRESS (spinning, cyan border on the current phase),
+PENDING (grey) — plus a progress bar, elapsed time, and the job number.
+The same card is visible in **Model Governance** for the selected
+station, so the audience never has to hunt for it. It polls the job
+status every ~0.6 s; the phases advance as the backend records them:
+
+1. Data Ingested → 2. Data Validated → 3. Data Preprocessed →
+4. Features Generated → 5. Training Isolation Forest →
+6. Model Evaluation → 7. Model Registered → 8. Model Activated.
+
+The card stays on screen when the job finishes: COMPLETED reads
+"MODEL ACTIVATED · 8/8 STEPS · 100% · Total ~6 s" (the ~6 s includes
+the UI round-trip; the service itself takes ~4 s). Clicking Train
+while a job is already running does not start a second job — the
+backend allows one running job per station and the UI attaches to the
+running one and shows its progress instead.
+
+**The honest failure (show it — it is a feature, not a bug).**
+Training AWS-01 (Udupi) ends FAILED in ~5 s: the card turns red at
+step 8, "TRAINING FAILED · 7/8 STEPS · 87.5%", and prints the real
+reason: `Model promotion gates failed: {'holdout_anomaly_rate': False,
+'incumbent_agreement': True, 'known_fault_validation': True,
+'readiness': True}` — Udupi's holdout anomaly rate is 0.153 against the
+0.15 gate, so the model is registered as a CANDIDATE but never
+activated. Say so on stage: the gate did its job. The previous active
+model (if any) stays in place; nothing is silently bypassed.
+
+If the server restarts mid-training, the interrupted job is marked
+FAILED on startup ("Training was interrupted by a server restart")
+instead of spinning forever — the card shows that reason too.
 
 ### M3. Register the Mamba model for AWS-02
 
