@@ -7,6 +7,7 @@ import statistics
 import uuid
 from backend.app.storage.database import get_db, fetch_historical_telemetry, insert_assessment_with_sequence_recovery
 from backend.app.services.training_service import training_service
+from backend.app.services.mamba_service import mamba_service
 from backend.app.services.model_storage import model_storage_service
 from backend.app.services.incident_reasoning import build_reasoning
 from ml.feature_engine import instant, readiness, valid_core, feature_engine, PARAMETERS
@@ -18,6 +19,13 @@ QC_RESIDUAL = 3.
 NOISE_INDEX = 3.
 SEVERE_RESIDUAL = 6.
 RESIDUAL_SATURATION = SEVERE_RESIDUAL
+
+# Default fusion weights. Fitted coefficients (fusion_coefficients table)
+# override these where present; evidence types added later (z_mamba) keep
+# their default weight when the fitted set does not include them.
+FUSION_DEFAULT_WEIGHTS = {'intercept': -3.0, 'z_qc': 1.5, 'z_phys': 3.,
+                          'z_temp': 2.5, 'z_ml': 3., 'z_mamba': 2.5,
+                          'z_multi': 1., 'z_health': 1.}
 
 
 def canonical(value):
@@ -87,7 +95,15 @@ def normalize(station_id, payload, source='OBSERVATION'):
 
 
 def fuse(evidence, coefficients=None):
-    weights = coefficients or {'intercept': -3.0, 'z_qc': 1.5, 'z_phys': 3., 'z_temp': 2.5, 'z_ml': 3., 'z_multi': 1., 'z_health': 1.}
+    # Fitted coefficients override the defaults where present; a channel
+    # with no fitted coefficient keeps its default weight. When the
+    # Mamba channel is absent from the evidence entirely, its weight is
+    # dropped so the scale is identical to the pre-Mamba behaviour.
+    weights = dict(FUSION_DEFAULT_WEIGHTS)
+    if coefficients:
+        weights.update(coefficients)
+    if evidence.get('z_mamba') is None:
+        weights.pop('z_mamba', None)
     available = {k:v for k,v in evidence.items() if v is not None}
     total = sum(abs(v) for k,v in weights.items() if k != 'intercept')
     active = sum(abs(weights.get(k,0)) for k in available)
@@ -151,6 +167,19 @@ class ObservationPipeline:
         ml = {'has_model': False, 'is_anomaly': False, 'anomaly_score': None, 'status': 'RULES_ONLY'}
         if not hard and ready['tier'] in ('TRAINED','MATURE'):
             ml = training_service.score_observation(sid,row,history=history[-12:])
+        # Mamba temporal score (companion model; same readiness gate as the
+        # Isolation Forest). The hybrid score needs both raw engine scores.
+        mamba = {'has_model': False, 'score': None, 'errors': None, 'status': 'MAMBA_NOT_REGISTERED'}
+        hybrid = None
+        if not hard and ready['tier'] in ('TRAINED','MATURE'):
+            # Pass a generous slice, not just the last 24 rows: the Mamba
+            # window selector picks the last 24 *hourly-spaced* rows, and
+            # rapid live frames (seconds apart) in the last 24 would leave
+            # it short. 200 rows is plenty to find 24 hourly ones.
+            mamba = mamba_service.score_observation(sid, row, history=history[-200:])
+            if mamba.get('has_model') and mamba.get('score') is not None \
+                    and ml.get('has_model') and ml.get('anomaly_score') is not None:
+                hybrid = mamba_service.combine_scores(sid, ml['anomaly_score'], mamba['score'])
         previous = history[-1] if history else None
         flatline = len(history) >= 4 and all(all(r[p] == row[p] for p in ('temp','hum','pres')) for r in history[-4:]) and not hard
         delta = {p: abs(row[p]-previous[p]) if not hard and previous else 0. for p in ('temp','hum','pres')}
@@ -195,6 +224,7 @@ class ObservationPipeline:
         evidence = {'z_qc': float(qc or bool(breached)), 'z_phys': float(hard),
             'z_temp': float(spike or flatline or noisy or persistent_departure or drifting) if previous else None,
             'z_ml': float(ml['is_anomaly']) if ml.get('has_model') else None,
+            'z_mamba': float(mamba['is_anomaly']) if mamba.get('has_model') and mamba.get('score') is not None else None,
             'z_multi': float(bool(physical)), 'z_health': None}
         cur.execute('SELECT coefficients FROM fusion_coefficients WHERE status = ? ORDER BY id DESC LIMIT 1', ('FITTED_SYNTHETIC',))
         fitted = cur.fetchone()
@@ -250,7 +280,7 @@ class ObservationPipeline:
         pending = (candidate and not regional) or partial
         weather = regional or pending
         classification = 'REGIONAL_EVENT' if regional else 'LOCALIZED_ANOMALY_UNCONFIRMED' if pending else ('LOCALIZED_ANOMALY' if len(peers)>=2 else 'LOCALIZED_ANOMALY_UNCONFIRMED') if local else 'NORMAL'
-        completeness = sum(v is not None for v in evidence.values())/6
+        completeness = sum(v is not None for v in evidence.values())/len(evidence)
         confidence = min(completeness, .9 if len(peers)>=2 else .5)
         root = 'NOMINAL'
         if weather:
@@ -297,10 +327,13 @@ class ObservationPipeline:
             'root_cause':root,'root_cause_diagnosis':diagnosis,'interpretation':diagnosis['specific_reason'],'observed':{p:row[p] for p in ('temp','hum','pres')},
             'expected':expected,'residuals':z,'integrity_issues':issues,'physics_violations':physical,'regional_candidate':candidate,
             'fleet_evidence':{'eligible_peer_count':len(peers),'agreement_index':agreement,'corroborating_peers':corroborating,'peers':peers,'fleet_evidence_state':'AVAILABLE' if len(peers)>=2 else 'INCOMPLETE'},
-            'imputation':imputed,'anomaly_score':ml.get('anomaly_score'), 'badge_class':'badge-normal' if not local else 'badge-extreme' if weather else 'badge-critical'}
+            'imputation':imputed,'anomaly_score':ml.get('anomaly_score'), 'badge_class':'badge-normal' if not local else 'badge-extreme' if weather else 'badge-critical',
+            'mamba_score':mamba.get('score'),'mamba_errors':mamba.get('errors'),'mamba_prediction':mamba.get('prediction'),'mamba_status':mamba.get('status'),
+            'hybrid_score':hybrid.get('S_hybrid') if hybrid else None,
+            'hybrid_contributions':{'IF':hybrid.get('contrib_IF'),'Mamba':hybrid.get('contrib_Mamba')} if hybrid else None}
         return {'station_id':sid,'station_name':station['station_name'],'latitude':station['latitude'],'longitude':station['longitude'],'elevation':station['elevation'],
             'region':station['region'],'source_timestamp':ts,'last_seen':ts,'status':classification,'sensors':sensors,'battery':row['battery'],'signal':row['signal'],
-            'readiness':ready,'final_assessment':assessment,'ml_model':ml,'root_cause_diagnosis':diagnosis,'sensor_health':health,
+            'readiness':ready,'final_assessment':assessment,'ml_model':ml,'mamba_model':mamba,'hybrid':hybrid,'root_cause_diagnosis':diagnosis,'sensor_health':health,
             'thermodynamic_violations':physical,'derived_thermodynamics':thermo_engine.compute_all_thermodynamic_features(row['temp'],row['pres'],row['hum'],station['elevation'] or 0) if not hard else {},
             'spatial_data':{'nearby_stations':peers,'eligible_peer_count':len(peers),'agreement_index':agreement,'spatial_analysis':assessment['fleet_evidence']},
             'self_healing_data':{'is_healed':bool(imputed),'imputed_sensors':{**{k:dict(v,is_imputed=False) for k,v in sensors.items()},**imputed}}}
