@@ -20,6 +20,15 @@ The district values are real supplied data; the Mamba models are
 trained on the same district files. The tests assert wiring, not
 accuracy. Mamba is trained with few epochs here (wiring, not accuracy).
 
+The two districts' series come from the committed fixture
+(backend/tests/fixtures/), which is the district-mean hourly series
+derived from the supplied NOAA files — NOT from a data/ folder next
+to the checkout. An earlier version of this file read the raw CSVs
+from a sibling data/ directory that only existed on one machine, so
+these two tests failed with FileNotFoundError in CI. The fixture
+keeps the tests self-contained and reproducible anywhere the repo
+is checked out.
+
 Run:  ../venv/bin/python -m pytest backend/tests/test_mamba_pipeline.py
 """
 
@@ -39,7 +48,10 @@ from backend.app.services.training_service import training_service
 from ml.mamba_engine import load_district_series
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-DATA_DIR = REPO_ROOT.parent / "data"
+# Committed fixture (see fixtures/README.md): the district-mean hourly
+# series derived from the supplied district files. Must live inside the
+# repo — a data/ folder next to the checkout does not exist in CI.
+DATA_DIR = Path(__file__).resolve().parent / "fixtures"
 
 
 def _load_register_mamba():
