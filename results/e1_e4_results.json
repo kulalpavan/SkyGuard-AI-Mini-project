@@ -1,0 +1,290 @@
+{
+  "method": {
+    "splits": "chronological: train earliest 60%, validation next 10%, test latest 30% (point indices)",
+    "window": 24,
+    "mamba": "d_model=32, state_dim=8, lr=0.003, Adam, epochs=15, best-val checkpoint",
+    "if": "repo IsolationForest, n_trees=40, 12-feature contract (feature_engine), climatology fit on train",
+    "alpha_search": "grid 0..1 step 0.05 on validation with injected faults, F1 max subject to FPR<=0.05 measured on CLEAN validation points (tau is the 95th pct of clean hybrid scores, so clean FPR is ~0.05 by construction; the injected copy's normal-point FPR is inflated by fault-contaminated windows and is reported separately, not constrained)",
+    "fusion": "60 km radius, propagation window 6 h, paper Eqs. 18-23",
+    "metrics": "raw point-wise precision/recall/F1 (no point adjustment), FPR, detection delay (h)",
+    "notes": [
+      "Regional/sea-breeze events are injected only for the prototype pair Udupi/Dakshina Kannada.",
+      "No wind data exist in the supplied files, so front consistency c is derived from the delayed-neighbour pattern, not a wind shift.",
+      "No device-health telemetry exists in the supplied files, so h = 0 throughout.",
+      "Mamba/IF scores are unavailable for points whose window/history contains injected missing values; those points rely on ingest QC."
+    ]
+  },
+  "districts": {
+    "Udupi": {
+      "sigma_e": [
+        0.2938054215347703,
+        1.3791527575576588,
+        0.5344639757316508
+      ],
+      "alpha": 0.0,
+      "tau_hybrid": 0.9501915708812261,
+      "n_test_points": 553,
+      "temperature_C": {
+        "mamba_MAE": 0.24634285157404318,
+        "mamba_RMSE": 0.3147498287224592,
+        "persistence_MAE": 0.25271558167570857,
+        "persistence_RMSE": 0.3422436747639223,
+        "ar1_MAE": 0.25349759206847,
+        "ar1_RMSE": 0.3386997248994893
+      },
+      "humidity_pct": {
+        "mamba_MAE": 1.1609574693086395,
+        "mamba_RMSE": 1.4852393480627375,
+        "persistence_MAE": 1.101043670886077,
+        "persistence_RMSE": 1.5583158375091644,
+        "ar1_MAE": 1.1078165625135195,
+        "ar1_RMSE": 1.5507258376503728
+      },
+      "pressure_hPa": {
+        "mamba_MAE": 0.43041431539260266,
+        "mamba_RMSE": 0.5371211365643702,
+        "persistence_MAE": 0.46834698613622694,
+        "persistence_RMSE": 0.5408028710937673,
+        "ar1_MAE": 0.46245536362214246,
+        "ar1_RMSE": 0.5362518191582765
+      }
+    },
+    "Dakshina Kannada": {
+      "sigma_e": [
+        0.2809176575216759,
+        1.3154692506936796,
+        0.5046736814360622
+      ],
+      "alpha": 0.15,
+      "tau_hybrid": 0.9304597701149424,
+      "n_test_points": 553,
+      "temperature_C": {
+        "mamba_MAE": 0.2299655618467312,
+        "mamba_RMSE": 0.2932943923845377,
+        "persistence_MAE": 0.2483725587703435,
+        "persistence_RMSE": 0.3206321539021912,
+        "ar1_MAE": 0.2495896979294129,
+        "ar1_RMSE": 0.31767263739355983
+      },
+      "humidity_pct": {
+        "mamba_MAE": 1.1187396173363755,
+        "mamba_RMSE": 1.5050850746963633,
+        "persistence_MAE": 1.1079111663652803,
+        "persistence_RMSE": 1.5266068611659642,
+        "ar1_MAE": 1.109757437355178,
+        "ar1_RMSE": 1.5133868600206675
+      },
+      "pressure_hPa": {
+        "mamba_MAE": 0.4260057817957338,
+        "mamba_RMSE": 0.5309445952838086,
+        "persistence_MAE": 0.4774138336347212,
+        "persistence_RMSE": 0.5532054783383529,
+        "ar1_MAE": 0.4706390921263948,
+        "ar1_RMSE": 0.5487406112389617
+      }
+    },
+    "Belagavi": {
+      "sigma_e": [
+        0.666036278819939,
+        2.7671607091894117,
+        0.564107475932516
+      ],
+      "alpha": 0.15,
+      "tau_hybrid": 0.9260536398467433,
+      "n_test_points": 567,
+      "temperature_C": {
+        "mamba_MAE": 0.4566137598624804,
+        "mamba_RMSE": 0.5870638071571116,
+        "persistence_MAE": 0.36510962773998484,
+        "persistence_RMSE": 0.5290522639202523,
+        "ar1_MAE": 0.3701983408245494,
+        "ar1_RMSE": 0.5239845934447447
+      },
+      "humidity_pct": {
+        "mamba_MAE": 2.4161260635504775,
+        "mamba_RMSE": 2.974813136470566,
+        "persistence_MAE": 1.5833374685059216,
+        "persistence_RMSE": 2.3907164625629065,
+        "ar1_MAE": 1.5750483863538285,
+        "ar1_RMSE": 2.3558486998133095
+      },
+      "pressure_hPa": {
+        "mamba_MAE": 0.4498426554455899,
+        "mamba_RMSE": 0.5540013680353625,
+        "persistence_MAE": 0.47436319916855496,
+        "persistence_RMSE": 0.5494711475709597,
+        "ar1_MAE": 0.46937014495318974,
+        "ar1_RMSE": 0.5472107459362913
+      }
+    },
+    "Bengaluru Urban": {
+      "sigma_e": [
+        0.6097168340088084,
+        2.5041921280343247,
+        0.5601470628876828
+      ],
+      "alpha": 0.5,
+      "tau_hybrid": 0.9099616858237548,
+      "n_test_points": 567,
+      "temperature_C": {
+        "mamba_MAE": 0.4655178034147278,
+        "mamba_RMSE": 0.6265383041348151,
+        "persistence_MAE": 0.5553109126984127,
+        "persistence_RMSE": 0.7749034811260788,
+        "ar1_MAE": 0.5619525038422494,
+        "ar1_RMSE": 0.7633529298827106
+      },
+      "humidity_pct": {
+        "mamba_MAE": 1.9181222147980481,
+        "mamba_RMSE": 2.5616400373142025,
+        "persistence_MAE": 2.3977591710758377,
+        "persistence_RMSE": 3.271018200835299,
+        "ar1_MAE": 2.405310270939026,
+        "ar1_RMSE": 3.2250147502913933
+      },
+      "pressure_hPa": {
+        "mamba_MAE": 0.38805963446338826,
+        "mamba_RMSE": 0.4789295379485408,
+        "persistence_MAE": 0.5499385361552056,
+        "persistence_RMSE": 0.6386096821518769,
+        "ar1_MAE": 0.5412445491578147,
+        "ar1_RMSE": 0.634122647700945
+      }
+    },
+    "Mysore": {
+      "sigma_e": [
+        0.5986777793344809,
+        2.4846802679700457,
+        0.46898617761508427
+      ],
+      "alpha": 0.75,
+      "tau_hybrid": 0.9051724137931034,
+      "n_test_points": 567,
+      "temperature_C": {
+        "mamba_MAE": 0.41614867227973046,
+        "mamba_RMSE": 0.553169887191782,
+        "persistence_MAE": 0.5436192239858906,
+        "persistence_RMSE": 0.7602119578425338,
+        "ar1_MAE": 0.5407619332894016,
+        "ar1_RMSE": 0.7487015181213358
+      },
+      "humidity_pct": {
+        "mamba_MAE": 1.8676626116875783,
+        "mamba_RMSE": 2.5053390854848403,
+        "persistence_MAE": 2.4093969625710367,
+        "persistence_RMSE": 3.3561625310340095,
+        "ar1_MAE": 2.3721867936400938,
+        "ar1_RMSE": 3.3083484264094345
+      },
+      "pressure_hPa": {
+        "mamba_MAE": 0.401950158237895,
+        "mamba_RMSE": 0.4998784784019015,
+        "persistence_MAE": 0.5523556731334507,
+        "persistence_RMSE": 0.6359083934155421,
+        "ar1_MAE": 0.542492720930944,
+        "ar1_RMSE": 0.6296822065009569
+      }
+    }
+  },
+  "configs": {
+    "E1": {
+      "precision": 0.6109358569926393,
+      "recall": 0.5173642030276047,
+      "f1": 0.5602700096432016,
+      "fpr": 0.13181332383327396,
+      "tp": 581,
+      "fp": 370,
+      "fn": 542,
+      "tn": 2437,
+      "mean_delay_h": 3.5034343434343436,
+      "instances_detected": 62,
+      "instances_missed": 4,
+      "per_scenario_recall": {
+        "temp_spike": 1.0,
+        "humidity_drift": 0.34375,
+        "pressure_abnormality": 0.2833333333333333,
+        "stuck_sensor": 0.4916666666666666,
+        "missing": 1.0,
+        "gradual_degradation": 0.6638888888888889,
+        "regional_event": 0.8333333333333334,
+        "sea_breeze": 1.0
+      }
+    },
+    "E2": {
+      "precision": 0.5818431911966988,
+      "recall": 0.37666963490650046,
+      "f1": 0.45729729729729734,
+      "fpr": 0.10830067687923049,
+      "tp": 423,
+      "fp": 304,
+      "fn": 700,
+      "tn": 2503,
+      "mean_delay_h": 5.717272727272727,
+      "instances_detected": 63,
+      "instances_missed": 3,
+      "per_scenario_recall": {
+        "temp_spike": 1.0,
+        "humidity_drift": 0.2958333333333334,
+        "pressure_abnormality": 0.5,
+        "stuck_sensor": 0.36666666666666664,
+        "missing": 1.0,
+        "gradual_degradation": 0.28888888888888886,
+        "regional_event": 1.0,
+        "sea_breeze": 1.0
+      }
+    },
+    "E3": {
+      "precision": 0.5748218527315915,
+      "recall": 0.43098842386464825,
+      "f1": 0.4926208651399491,
+      "fpr": 0.12753829711435696,
+      "tp": 484,
+      "fp": 358,
+      "fn": 639,
+      "tn": 2449,
+      "mean_delay_h": 4.088484848484848,
+      "instances_detected": 63,
+      "instances_missed": 3,
+      "per_scenario_recall": {
+        "temp_spike": 1.0,
+        "humidity_drift": 0.34375000000000006,
+        "pressure_abnormality": 0.4666666666666667,
+        "stuck_sensor": 0.4,
+        "missing": 1.0,
+        "gradual_degradation": 0.38888888888888895,
+        "regional_event": 1.0,
+        "sea_breeze": 1.0
+      }
+    },
+    "E4": {
+      "precision": 0.5748218527315915,
+      "recall": 0.43098842386464825,
+      "f1": 0.4926208651399491,
+      "fpr": 0.12753829711435696,
+      "tp": 484,
+      "fp": 358,
+      "fn": 639,
+      "tn": 2449,
+      "mean_delay_h": 4.088484848484848,
+      "instances_detected": 63,
+      "instances_missed": 3,
+      "per_scenario_recall": {
+        "temp_spike": 1.0,
+        "humidity_drift": 0.34375000000000006,
+        "pressure_abnormality": 0.4666666666666667,
+        "stuck_sensor": 0.4,
+        "missing": 1.0,
+        "gradual_degradation": 0.38888888888888895,
+        "regional_event": 1.0,
+        "sea_breeze": 1.0
+      }
+    }
+  },
+  "classification_E4": {
+    "accuracy_on_detected": 0.5795724465558195,
+    "n_detected_anomaly_points": 842,
+    "sea_breeze_points_detected": 16,
+    "sea_breeze_points_blamed_as_fault": 5
+  },
+  "elapsed_seconds": 278.0
+}
