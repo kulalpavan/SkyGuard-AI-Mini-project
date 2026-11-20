@@ -95,6 +95,9 @@ idempotent — replays after the first show `DUPLICATE`, which is expected.
 > before you inject anything. **For the live "normal" frames in §5, use
 > 25.0 °C / 60 % / 1010.0 hPa** — those score `NORMAL` (fusion ≈ 0.047).
 > AWS-02 has no CSV history, so it accepts realistic values as normal.
+> (The seed rows are tagged synthetic and excluded from model *training* —
+> see M2b. The 25.0 °C "normal" here is the live-*scoring* behaviour, not
+> the training data.)
 >
 > **Jitter the values.** The pipeline flags a stuck sensor when the last
 > four observations are exactly identical on temperature, humidity and
@@ -341,7 +344,7 @@ first, then this section. Every command below was run successfully
 2026-11-20.
 
 **Do not do this for AWS-01 (Udupi).** Its IF training job fails the
-repo's own promotion gate — holdout anomaly rate 0.153 > 0.15, the
+repo's own promotion gate — holdout anomaly rate 0.157 > 0.15, the
 only district of the five that fails — so no ACTIVE IF model exists
 there and the pipeline shows a Mamba score but no hybrid score. That
 is the gate doing its job; do not bypass it. AWS-02's gate passes
@@ -398,12 +401,13 @@ then Mamba trains for **~45 s** (15 epochs over ~1,500 train windows),
 so the whole job finishes in **~53 s**. Per-phase breakdown of the IF
 part of a retrain: history fetch 0.03 s, climatology + scrubbing
 1.8 s, feature generation 0.6 s, forest fit 0.5 s, evaluation 0.4 s,
-registration + activation 0.1 s. Udupi takes **~4 min** (3m45s first
-run, 4m20s retrain — its history is 17,617 rows, because the demo seed
-`test_weather.csv` contributes 15,000 flat hourly rows on top of the
-2,617 backfilled ones, so Mamba trains on ~16.5k hourly points /
-~9.8k windows); it fails honestly on the IF gate (see M2b) but its
-Mamba model still registers. To check the job
+registration + activation 0.1 s. Udupi takes **~50 s** too (it took
+~4 min before the seed-row fix — its training history was 17,617 rows
+because the demo seed `test_weather.csv` contributed 15,000 flat hourly
+rows; the seed rows are now tagged synthetic and excluded from training,
+so Udupi trains on its 2,617 backfilled rows like AWS-02). It still
+fails honestly on the IF gate (see M2b) but its Mamba model still
+registers. To check the job
 from the terminal instead of the UI, poll its status until it completes:
 
 ```bash
@@ -446,21 +450,51 @@ backend allows one running job per station and the UI attaches to the
 running one and shows its progress instead.
 
 **The honest failure (show it — it is a feature, not a bug).**
-Training AWS-01 (Udupi) takes ~4 min and ends FAILED: the card turns
-red at the end, "TRAINING FAILED · 10/11 STEPS · 90.9% · Total 4m 20s",
-and prints the real reason: `Isolation Forest: Model promotion gates
-failed: {'holdout_anomaly_rate': False, 'incumbent_agreement': True,
-'known_fault_validation': True, 'readiness': True}` — on the live demo
-database Udupi's holdout anomaly rate is 1.0 against the 0.15 gate (the
-demo seed `test_weather.csv` contributes 15,000 flat hourly rows, so the
-forest fits an almost-constant region and the varying backfilled rows in
-the holdout all score anomalous; the 0.153 figure in earlier notes was
-the fixture-only evaluation on the 2,617 district rows alone), so the
-model is registered as a CANDIDATE but never activated. The card also
-shows the per-engine outcome: Isolation Forest trained but not
-activated, **Mamba registered** — the gate failure does not block Mamba
-training. Say so on stage: the gate did its job. The previous active
-model (if any) stays in place; nothing is silently bypassed.
+Training AWS-01 (Udupi) takes ~50 s and ends FAILED: the card turns
+red at the end, "TRAINING FAILED · 10/11 STEPS · 90.9% · Total ~50s",
+and prints the real reason in plain words: `Holdout anomaly rate
+15.6% is above the 15% limit, so the model is saved as a candidate but
+not activated. The validation data looked more unusual than the training
+data; the station needs a longer or more varied history before the model
+can activate.` — followed by the gate dict. The card also shows the
+per-engine outcome: Isolation Forest trained but not activated, **Mamba
+registered** — the gate failure does not block Mamba training. Say so on
+stage: the gate did its job. The previous active model (if any) stays in
+place; nothing is silently bypassed.
+
+**Why Udupi fails — the measured story, not a guess.** Two different
+numbers were seen for this station and they have two different causes;
+do not mix them up on stage:
+- **1.0 (old, fixed):** on the demo database before the fix, Udupi's
+  holdout rate was 1.0 — every holdout row flagged. Cause: the 15,000
+  flat rows of `test_weather.csv` (25.0 °C / 60 % / 1010.0 hPa) dominated
+  the training history, so the climatology fit collapsed (robust sigma
+  0.0) and every real row looked anomalous. Fixed: the seeder now tags
+  those rows `synthetic:demo-seed` and the training history excludes
+  them (plus a guard that drops long exactly-constant runs). The
+  "TRAIN MODEL (17,665 RECORDS)" button counts all stored rows; training
+  uses the 2,617 real backfilled observations.
+- **0.157 (current, genuine):** with a clean history Udupi's rate is
+  0.157 (15.7%) on the live demo database — 0.153 on the unshifted
+  fixture. This is real weather, not a bug: the chronological holdout
+  (the last 20% of the series) contains two regional monsoon-break dry
+  spells, 24–25 Aug and 9–13 Sep 2025, when humidity sat near 83%
+  against a ~90% monsoon baseline. 76 of the 80 flagged holdout rows
+  are those two spells; without them the rate would be 0.011. Dakshina
+  Kannada has the *same* two spells in its holdout and passes at 0.095 —
+  Udupi is normally the more humid station (fit mean 90.0% vs 89.3%), so
+  the same dip is a bigger deviation there. The gate is doing its job:
+  a model must not call more than 15% of clean validation data anomalous.
+  **What would change it:** a longer history — more monsoon seasons in
+  the training data, so dry spells stop being unprecedented in
+  validation. Do not relax the gate, the split, or the validation to
+  force a green result.
+- **Old un-wiped databases:** if you train on a database built before
+  the fix (flat rows untagged), the constant-run guard still prevents
+  the 1.0 blow-up — the rate comes back 0.052 and the model activates —
+  but the surviving interleaved flat rows widen the fit, so treat the
+  wiped-and-reseeded numbers above as the reference. Wipe per §1 before
+  presenting.
 
 If the server restarts mid-training, the interrupted job is marked
 FAILED on startup ("Training was interrupted by a server restart")
@@ -566,7 +600,7 @@ open the incident:
   path, not a fitted model. **The Mamba add-on (§M1–M5) fixes this for
   AWS-02** (backfilled history → trained IF → registered Mamba); AWS-01
   cannot be trained through the normal flow because its holdout
-  anomaly rate (0.153) fails the promotion gate (see §M).
+  anomaly rate (0.157) fails the promotion gate (see §M).
 - **Fusion scores use default priors**, not field-fitted weights — the
   assessment itself says "Synthetic calibration only; not a field-validated
   probability." Use them to rank incidents, not as probabilities.

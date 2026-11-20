@@ -100,6 +100,12 @@ def load_telemetry_from_csv(csv_path: Path):
             ts = row.get("timestamp") or row.get("date") or row.get("time")
             if not ts:
                 raise ValueError("Demo CSV requires a timestamp/date/time column")
+            # Tag the rows as synthetic replay fixture: test_weather.csv is
+            # one flat repeated value (25.0 C / 60% / 1010.0 hPa), not real
+            # observations. The training history excludes grid_point
+            # 'synthetic:*', so these rows can still be replayed by
+            # offline_replay.py but can never dominate a climatology fit
+            # (before this tag they did — Udupi's holdout rate hit 1.0).
             rows_by_station.setdefault(sid, []).append({
                 "timestamp": ts,
                 "temp": float(row.get("temperature_c", row.get("temp", row.get("temperature", 0)))),
@@ -107,6 +113,7 @@ def load_telemetry_from_csv(csv_path: Path):
                 "pres": float(row.get("pressure_hpa", row.get("pres", row.get("pressure", 0)))),
                 "wind": float(row.get("wind_speed_kmh", row.get("wind", row.get("wind_speed", 0)))),
                 "rain": float(row.get("rainfall_mm", row.get("rain", row.get("rainfall", 0)))),
+                "grid_point": "synthetic:demo-seed",
             })
     if not rows_by_station:
         raise ValueError("Demo CSV contains no usable telemetry rows")

@@ -46,8 +46,11 @@ def main():
                          "district series, 2,617 h). Use the whole series: "
                          "the IF training promotion gate (holdout anomaly "
                          "rate <= 0.15) fails on a short 800 h backfill "
-                         "(rate 0.350) but passes on the full series "
-                         "(rate 0.139, measured 2026-11-20).")
+                         "(rate 0.350) and still fails on the full series "
+                         "for Udupi (rate 0.153, measured 2026-11-20 — two "
+                         "real dry spells sit in the chronological holdout; "
+                         "see DEMO_RUNBOOK.md M2b). An earlier note claimed "
+                         "0.139 here; that was wrong.")
     ap.add_argument("--data-dir", default=None,
                     help="district CSV directory (default: ../skyguard-ai/data)")
     args = ap.parse_args()

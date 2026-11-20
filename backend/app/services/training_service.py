@@ -18,6 +18,30 @@ from ml.station_adaptive_pipeline import IsolationForest, StationAdaptiveMLPipel
 from ml.shap_engine import TreeSHAPEngine
 
 
+def _drop_constant_runs(rows, min_run=24):
+    """Drop runs of >= min_run consecutive rows with identical (temp, hum, pres).
+
+    A real AWS varies hour to hour; a long exactly-constant run is replay
+    fixture or a stuck sensor, not real weather. Left in the history it
+    dominates the climatology fit (robust sigma collapses to ~0), and then
+    every real row looks anomalous — that is how the demo seed once pushed
+    Udupi's holdout rate to 1.0. Real varying data is never affected: three
+    floats exactly equal for 24 straight hours is not weather.
+    """
+    kept, run, prev = [], [], None
+    for row in rows:
+        key = (row.get("temp"), row.get("hum"), row.get("pres"))
+        if key == prev:
+            run.append(row)
+        else:
+            if len(run) < min_run:
+                kept.extend(run)
+            run, prev = [row], key
+    if len(run) < min_run:
+        kept.extend(run)
+    return kept
+
+
 class TrainingEligibilityError(ValueError):
     def __init__(self, eligibility):
         self.eligibility = eligibility
@@ -40,7 +64,8 @@ class StationAdaptiveTrainingService:
                     clean[row['timestamp']] = row
             except (ValueError, TypeError):
                 continue
-        return sorted(clean.values(), key=lambda r: r['timestamp']), len(rows)
+        ordered = sorted(clean.values(), key=lambda r: r['timestamp'])
+        return _drop_constant_runs(ordered), len(rows)
 
     def start_training(self, station_id, custom_version=None):
         sid = station_id.strip().upper()
@@ -251,7 +276,16 @@ class StationAdaptiveTrainingService:
                 raise ValueError('Artifact hash verification failed')
             card = artifact['model_card']
             if card.get('readiness_tier') not in ('TRAINED','MATURE') or not card.get('gate_results') or not all(card['gate_results'].values()):
-                raise ValueError(f'Model promotion gates failed: {card.get("gate_results")}')
+                gates = card.get('gate_results') or {}
+                detail = f'Model promotion gates failed: {gates}'
+                if gates.get('holdout_anomaly_rate') is False:
+                    rate = (card.get('metrics') or {}).get('anomaly_rate')
+                    rate_txt = f'{rate:.1%}' if rate is not None else 'over the 15% limit'
+                    detail += (f' Holdout anomaly rate {rate_txt} is above the 15% limit, so the model is saved '
+                               'as a candidate but not activated. The validation data looked more unusual than '
+                               'the training data; the station needs a longer or more varied history before the '
+                               'model can activate.')
+                raise ValueError(detail)
             cur.execute("SELECT id FROM incidents WHERE station_id = ? AND status = 'open' AND quality_state != 'REGIONAL_EVENT'", (station_id,))
             if cur.fetchone():
                 raise ValueError('Open sensor incident prevents promotion')
