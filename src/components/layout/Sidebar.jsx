@@ -332,13 +332,27 @@ export const Sidebar = ({ collapsed, setCollapsed }) => {
           <div style={{ marginTop: '6px', paddingTop: '6px', borderTop: '1px solid var(--border-subtle)' }}>
             {(stations || []).map(st => {
               const reg = modelRegistry[st.id];
-              const ifStatus = st.model_status === 'ACTIVE_PRODUCTION' ? 'ACTIVE' : 'PENDING';
+              // The IF status comes from the registry API this sidebar
+              // already fetches (reg.if). The fleet station's
+              // model_status only reflects the latest live assessment,
+              // so it said PENDING for AWS-02 even though its IF model
+              // is ACTIVE in the registry. While the registry fetch is
+              // still loading (reg undefined) or failed (reg null),
+              // fall back to the fleet value.
+              const ifStatus = reg
+                ? (reg.if || 'NOT REGISTERED')
+                : (st.model_status === 'ACTIVE_PRODUCTION' ? 'ACTIVE' : 'PENDING');
+              const ifColor = ifStatus === 'ACTIVE'
+                ? 'var(--neon-green)'
+                : ifStatus === 'NOT REGISTERED'
+                  ? 'var(--text-muted)'
+                  : 'var(--neon-amber)';
               const mambaStatus = reg ? (reg.mamba || 'NOT REGISTERED') : (st.mamba_model?.has_model ? 'REGISTERED' : 'NOT REGISTERED');
               return (
                 <div key={st.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.68rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', padding: '2px 0' }}>
                   <span style={{ fontWeight: 700, color: 'var(--text-secondary)' }}>{st.id}</span>
                   <span>
-                    IF <strong style={{ color: ifStatus === 'ACTIVE' ? 'var(--neon-green)' : 'var(--neon-amber)' }}>{ifStatus}</strong>
+                    IF <strong style={{ color: ifColor }}>{ifStatus}</strong>
                     {' · '}Mamba <strong style={{ color: mambaStatus === 'ACTIVE' ? 'var(--neon-green)' : mambaStatus === 'CANDIDATE' ? 'var(--neon-amber)' : 'var(--text-muted)' }}>{mambaStatus}</strong>
                   </span>
                 </div>

@@ -63,6 +63,7 @@ export const QCRules = () => {
   const [draft, setDraft] = useState({});
   const [saveState, setSaveState] = useState(null); // { ok, message }
   const [isSaving, setIsSaving] = useState(false);
+  const [isCalibrating, setIsCalibrating] = useState(false);
 
   const isAdmin = role === 'admin' || role === 'CENTRAL_ADMIN';
   const hasAccess = isAdmin || (role === 'station_operator' && assignedStationId === activeStationId);
@@ -157,6 +158,34 @@ export const QCRules = () => {
     }
   };
 
+  // Derive the envelope from the station's own valid history
+  // (1st-99th percentiles, min 720 usable readings). The backend
+  // refuses with a plain message when there is not enough history
+  // instead of inventing values.
+  const handleCalibrate = async () => {
+    if (!isAdmin) return;
+    setIsCalibrating(true);
+    setSaveState(null);
+    try {
+      const res = await apiClient.calibrateStationQC(activeStationId);
+      if (res?.success) {
+        tacticalAudio.playSuccess();
+        setSaveState({
+          ok: true,
+          message: `Envelope calibrated from ${res.config?.calibration_record_count ?? res.valid_records} valid historical readings for ${activeStationId} (1st–99th percentiles, method ${res.config?.calibration_method}). New observations outside it will be flagged.`,
+        });
+        await fetchQC();
+      } else {
+        setSaveState({ ok: false, message: res?.message || 'The backend did not confirm the calibration.' });
+      }
+    } catch (err) {
+      tacticalAudio.playAlarm();
+      setSaveState({ ok: false, message: `Calibration failed: ${err.message}` });
+    } finally {
+      setIsCalibrating(false);
+    }
+  };
+
   return (
     <div className="cyber-card">
       <div className="cyber-card-header">
@@ -164,16 +193,23 @@ export const QCRules = () => {
           <i className="fa-solid fa-sliders text-cyan"></i> QC PHYSICS MATRIX: {activeStationId}
         </div>
         {isAdmin && (
-          <button className="cyber-btn btn-sm btn-primary" onClick={handleSave} disabled={isSaving}>
-            <i className="fa-solid fa-floppy-disk"></i> {isSaving ? 'Saving…' : 'Save Envelope'}
-          </button>
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <button className="cyber-btn btn-sm" onClick={handleCalibrate} disabled={isCalibrating || isSaving}>
+              <i className="fa-solid fa-chart-line"></i> {isCalibrating ? 'Calibrating…' : 'Calibrate from history'}
+            </button>
+            <button className="cyber-btn btn-sm btn-primary" onClick={handleSave} disabled={isSaving || isCalibrating}>
+              <i className="fa-solid fa-floppy-disk"></i> {isSaving ? 'Saving…' : 'Save Envelope'}
+            </button>
+          </div>
         )}
       </div>
       <div className="cyber-card-body">
         <p style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', marginBottom: '16px' }}>
           Immutable hard physical limits execute first. Station-calibrated normal envelopes execute second.
           Only the envelope below is editable here — the hard limits and fusion weights are pipeline-wide
-          backend values, shown for reference.
+          backend values, shown for reference. “Calibrate from history” derives the envelope from this
+          station’s own valid readings (1st–99th percentiles, needs at least 720); a hand edit after that
+          overwrites it and is recorded as a manual override.
         </p>
 
         {saveState && (
@@ -209,7 +245,13 @@ export const QCRules = () => {
           <div className="sim-box" style={{ gridColumn: 'span 2' }}>
             <div className="sim-box-title">
               <span><i className="fa-solid fa-chart-area text-cyan"></i> STATION NORMAL ENVELOPE</span>
-              <span className="cyber-badge badge-normal">{stationQC ? 'CALIBRATED' : 'NOT SET'}</span>
+              <span className="cyber-badge badge-normal">
+                {!stationQC
+                  ? 'NOT SET'
+                  : stationQC.calibration_method === 'HISTORICAL_P01_P99'
+                    ? 'CALIBRATED FROM HISTORY'
+                    : 'MANUAL OVERRIDE'}
+              </span>
             </div>
 
             {isLoading ? (

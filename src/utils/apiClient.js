@@ -400,6 +400,16 @@ class ApiClient {
     });
   }
 
+  // Derives a station's normal envelope from its own valid history
+  // (1st-99th percentiles) via POST /admin/stations/{id}/qc/calibrate.
+  // Admin only. Needs at least 720 usable readings or the backend
+  // refuses with a plain 422 message instead of inventing an envelope.
+  async calibrateStationQC(stationId) {
+    return await this.request(`/admin/stations/${stationId}/qc/calibrate`, {
+      method: "POST"
+    });
+  }
+
   // -------------------------------------------------------------------------
   // Field Maintenance & Sensor Calibration Endpoints
   // -------------------------------------------------------------------------

@@ -6,9 +6,11 @@ import math
 import logging
 import statistics
 import uuid
+from typing import Any, Dict, Optional
 from backend.app.storage.database import (
     get_db, fetch_historical_telemetry, create_training_job, update_training_job,
     update_training_job_stage, get_active_model_record, list_station_models,
+    get_station_qc_config, calibrate_station_qc,
 )
 from backend.app.services.model_storage import model_storage_service
 from backend.app.services.mamba_training import train_mamba_from_station_history
@@ -227,6 +229,10 @@ class StationAdaptiveTrainingService:
                                          eligible['tier'], stage=stage)
             if_trained = True
             forest_bundle = (bundle['forest'], bundle['climate'], bundle['stats'])
+            # First training for a station with no QC envelope yet gets
+            # one derived from its own history (never overwrites an
+            # admin override; never fails the job if it fails).
+            maybe_auto_calibrate_qc(station_id)
             try:
                 self.activate(station_id, target_version)
                 stage('Model Activated')
@@ -366,6 +372,31 @@ class StationAdaptiveTrainingService:
         return {'station_id': station_id, 'has_model': True, 'model_id': record['model_id'], 'model_version': record['model_version'],
                 'status': 'ANOMALY' if score >= forest.threshold else 'NORMAL', 'anomaly_score': score, 'threshold': forest.threshold,
                 'is_anomaly': score >= forest.threshold, 'feature_vector': vector, 'xai_explanation': attribution}
+
+
+def maybe_auto_calibrate_qc(station_id: str) -> Optional[Dict[str, Any]]:
+    """Calibrate a station's QC envelope from history — but only the
+    first time, when the station has no envelope at all.
+
+    Called after a successful IF training run (see
+    execute_training_job). An admin's hand-set envelope (ADMIN_OVERRIDE)
+    or an earlier history calibration is never overwritten, and a
+    calibration failure never fails the training job: this returns None
+    and logs a warning instead of raising.
+    """
+    try:
+        if get_station_qc_config(station_id) is not None:
+            return None
+        config = calibrate_station_qc(station_id)
+        if config is not None:
+            logging.getLogger(__name__).info(
+                "Auto-calibrated QC envelope for %s from %s valid readings",
+                station_id, config.get("calibration_record_count"))
+        return config
+    except Exception:
+        logging.getLogger(__name__).warning(
+            "Auto QC calibration failed for %s", station_id, exc_info=True)
+        return None
 
 
 training_service = StationAdaptiveTrainingService()

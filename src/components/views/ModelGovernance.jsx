@@ -8,7 +8,7 @@ import { DriftPanel } from '../DriftPanel';
 
 export const ModelGovernance = () => {
   const { role, assignedStationId } = useAuth();
-  const { stations, activeStationId, modelRegistry, activeStationModels, rollbackModel, setCurrentView } = useWeather();
+  const { stations, activeStationId, activeStationModels, rollbackModel, refreshActiveStationModel, setCurrentView } = useWeather();
   const isOperator = role === 'station_operator' || role === 'STATION_OPERATOR';
   const isAdmin = role === 'admin' || role === 'CENTRAL_ADMIN';
 
@@ -22,7 +22,12 @@ export const ModelGovernance = () => {
 
   const selectedStation = stations.find(s => s.id === selectedStationId) || stations[0] || {};
   const stationModelEntry = activeStationModels[selectedStationId];
-  const activeModel = stationModelEntry?.modelCard || modelRegistry.find(m => m.station_id === selectedStationId) || null;
+  // The active model comes from the registry API only (via
+  // refreshActiveStationModel below). The old fallback read a static
+  // seed registry that is never populated from the backend, so every
+  // station except the active one showed a cold start even when its
+  // model was ACTIVE in the registry.
+  const activeModel = stationModelEntry?.modelCard || null;
 
   const fetchStationModels = async (stId) => {
     setIsLoadingModels(true);
@@ -41,8 +46,14 @@ export const ModelGovernance = () => {
   useEffect(() => {
     if (selectedStationId) {
       fetchStationModels(selectedStationId);
+      // The context only refreshes the model for the active station on
+      // its own; selecting another station here must refresh that
+      // station's active model too, or its card reads as a cold start.
+      // A station with no ACTIVE model still gets nothing back, so a
+      // genuinely untrained station keeps showing the cold-start notice.
+      if (refreshActiveStationModel) refreshActiveStationModel(selectedStationId);
     }
-  }, [selectedStationId]);
+  }, [selectedStationId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Live training progress for the selected station: the latest job is shown
   // (running jobs are polled every second until they finish, so the phases

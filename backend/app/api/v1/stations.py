@@ -5,7 +5,10 @@ from fastapi import APIRouter, HTTPException, Depends, status
 from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any, Union
 
-from backend.app.storage.database import get_db, get_station_qc_config
+from backend.app.storage.database import (
+    get_db, get_station_qc_config, calibrate_station_qc,
+    QC_CALIBRATION_MIN_RECORDS,
+)
 from backend.app.auth.security import hash_password
 from backend.app.config import DEMO_MODE
 from backend.app.api.v1.auth import require_admin, get_current_user, require_station_access
@@ -531,3 +534,104 @@ def update_qc_config(station_id: str, payload: UpdateQCConfigRequest, admin_user
             "message": "QC limits updated and audited successfully.",
             "config": dict(updated) if updated else None,
         }
+
+
+@router.post("/admin/stations/{station_id}/qc/calibrate", response_model=Dict[str, Any])
+def calibrate_qc_config(station_id: str, admin_user: Dict[str, Any] = Depends(require_admin)):
+    """
+    Central Admin endpoint: derive a station's normal envelope from its
+    own history (1st-99th percentiles of VALID, non-synthetic telemetry)
+    via calibrate_station_qc, which stamps HISTORICAL_P01_P99.
+
+    Refuses with 422 when the station has fewer than
+    QC_CALIBRATION_MIN_RECORDS (720) usable readings — an envelope is
+    never invented from thin data. The audit ledger records this as
+    QC_CALIBRATE_FROM_HISTORY, distinct from a hand edit
+    (QC_ENVELOPE_UPDATE / ADMIN_OVERRIDE), so the two can always be told
+    apart. A hand edit afterwards still overwrites the calibrated
+    envelope (as ADMIN_OVERRIDE), and re-calibrating overwrites a hand
+    edit — the latest write wins, and the ledger shows which it was.
+    """
+    target_id = station_id.strip().upper()
+    now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+    with get_db() as conn:
+        cursor = conn.cursor()
+
+        cursor.execute("SELECT id FROM stations WHERE station_id = ?", (target_id,))
+        if not cursor.fetchone():
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Weather station '{target_id}' not found."
+            )
+
+        cursor.execute(
+            "SELECT COUNT(*) AS valid_count FROM telemetry WHERE station_id = ? "
+            "AND qc_flag = 'VALID' "
+            "AND (grid_point IS NULL OR grid_point NOT LIKE 'synthetic:%')",
+            (target_id,))
+        valid_records = cursor.fetchone()["valid_count"]
+
+        if valid_records < QC_CALIBRATION_MIN_RECORDS:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    f"Not enough valid history to calibrate {target_id}: "
+                    f"{valid_records} usable readings, need at least "
+                    f"{QC_CALIBRATION_MIN_RECORDS}. Ingest more history "
+                    f"first, or set the envelope by hand."
+                ),
+            )
+
+        cursor.execute("SELECT * FROM station_qc_config WHERE station_id = ?", (target_id,))
+        existing_qc = cursor.fetchone()
+
+    config = calibrate_station_qc(target_id)
+    if config is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Calibration found no usable history for {target_id}.",
+        )
+
+    with get_db() as conn:
+        cursor = conn.cursor()
+        import json
+        cursor.execute("""
+            INSERT INTO config_audit (
+                station_id, actor, action, before_state, after_state, created_at
+            ) VALUES (?, ?, 'QC_CALIBRATE_FROM_HISTORY', ?, ?, ?)
+        """, (
+            target_id,
+            admin_user.get("sub", "admin"),
+            json.dumps(dict(existing_qc) if existing_qc else {}),
+            json.dumps({
+                "calibration_method": config.get("calibration_method"),
+                "calibration_record_count": config.get("calibration_record_count"),
+                "temperature_normal_min": config.get("temperature_normal_min"),
+                "temperature_normal_max": config.get("temperature_normal_max"),
+                "humidity_normal_min": config.get("humidity_normal_min"),
+                "humidity_normal_max": config.get("humidity_normal_max"),
+                "pressure_normal_min": config.get("pressure_normal_min"),
+                "pressure_normal_max": config.get("pressure_normal_max"),
+            }),
+            now_iso
+        ))
+
+        # Trigger reload in weather service
+        from backend.app.services.weather_service import weather_service
+        try:
+            weather_service.reevaluate()
+        except Exception:
+            pass
+
+    return {
+        "success": True,
+        "station_id": target_id,
+        "message": (
+            f"Envelope calibrated from {config.get('calibration_record_count')} "
+            f"valid historical readings (1st-99th percentiles)."
+        ),
+        "config": config,
+        "valid_records": valid_records,
+        "calibration_method": config.get("calibration_method"),
+    }

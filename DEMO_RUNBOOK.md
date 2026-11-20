@@ -658,6 +658,48 @@ job also computes drift for every station (first run 5 min after the
 backend starts, then daily); in DEMO_MODE it only records — it never
 queues candidates or opens incidents by itself.
 
+## QC calibration from history
+
+The QC envelope (the station normal range the pipeline flags readings
+against) used to be hand-set only — after a §1 reset both stations sit
+on wide ADMIN_OVERRIDE values (15–38 °C, 0–100 %RH, 900–1100 hPa,
+0 records). The calibration behind it, `calibrate_station_qc`, existed
+but was never called. It is wired up now, two ways:
+
+**Manual (demo this):** QC Physics Matrix (admin) → "Calibrate from
+history". It derives the envelope from the station's own VALID history
+(1st–99th percentiles per variable) and stamps
+`HISTORICAL_P01_P99` with the record count. It needs at least **720
+usable readings** — the same maturity as IF training — and refuses
+plainly below that instead of inventing an envelope. Synthetic seed
+rows (`grid_point LIKE 'synthetic:%'`) are excluded, so AWS-01's
+15,000 flat seed rows can never dominate its calibration; only its
+2,617 real rows count. A variable with no data (wind in the demo
+history) gets blank bounds, never a 0–0 range. The audit ledger
+records it as `QC_CALIBRATE_FROM_HISTORY`, distinct from a hand edit
+(`QC_ENVELOPE_UPDATE` / `ADMIN_OVERRIDE`).
+
+**Automatic:** the first training run for a station with no envelope
+at all auto-calibrates from its history. An admin override (or an
+earlier calibration) is never overwritten.
+
+**Verified live 2026-11-20:** AWS-02 calibrated from the UI to
+T 24.23–29.35 °C, RH 74.47–94.12 %, P 1003.92–1012.37 hPa from 2,617
+readings (wind blank). A reading just outside it (30.4 °C, otherwise
+median conditions) set z_qc = 1.0. Say on stage: "The normal range is
+not a number I typed — it is the 1st to 99th percentile of this
+station's own past readings." A hand edit after calibration overwrites
+it and is recorded as a manual override; re-calibrating overwrites a
+hand edit. The latest write wins, and the ledger shows which it was.
+
+**Model Governance shows the registry truth now.** The model card and
+the sidebar Fleet Status read the real model registry: AWS-02 shows
+its ACTIVE model (AWS-02_IF_v2.7221a4d39cbb) and "IF ACTIVE"; AWS-01
+and AWS-03 show "IF CANDIDATE" — their IF models are registered but
+never activated, so Model Governance honestly shows the cold-start
+notice for them (AWS-01's card explains why in plain words: holdout
+15.6% over the 15% limit, Mamba registered).
+
 ## Known limitations (do not present these as working)
 
 - **No trained Isolation Forest model exists for these stations yet

@@ -1604,36 +1604,57 @@ def get_station_qc_config(station_id: str) -> Optional[Dict[str, Any]]:
         row = cur.fetchone()
         return dict(row) if row else None
 
-def calibrate_station_qc(station_id: str) -> Optional[Dict[str, Any]]:
+# Minimum VALID history needed to calibrate a QC envelope from data.
+# 720 readings matches the Isolation Forest TRAINED maturity tier
+# (ml/feature_engine.readiness: >= 720 distinct timestamps over >= 14
+# days). Below this, percentiles of a short window are not a trustworthy
+# picture of the station's normal range, so calibration refuses rather
+# than inventing an envelope.
+QC_CALIBRATION_MIN_RECORDS = 720
+
+def calibrate_station_qc(station_id: str, min_records: int = QC_CALIBRATION_MIN_RECORDS) -> Optional[Dict[str, Any]]:
+    """Derive a station's normal envelope from its own history.
+
+    Uses VALID telemetry only, 1st-99th percentiles per variable, and
+    stamps calibration_method='HISTORICAL_P01_P99'. Rows tagged
+    synthetic:* (demo seed / replay fixtures) are excluded — the same
+    exclusion training_service.history() applies — because a seeded
+    constant (e.g. 15,000 flat 25.0 C rows) would otherwise dominate
+    the percentiles. A variable with no data gets NULL bounds, never
+    a degenerate 0-0 range. Returns None when there are fewer than
+    min_records usable rows: no envelope is invented from thin data.
+    """
     clean_id = station_id.strip().upper()
-    
+
     with get_db() as conn:
         cur = conn.cursor()
-        
-        # 1. Fetch valid historical data ONLY
+
+        # 1. Fetch valid historical data ONLY (no synthetic seed rows).
         cur.execute(
             "SELECT temperature, humidity, pressure, wind_speed "
             "FROM telemetry "
-            "WHERE station_id = %s AND qc_flag = 'VALID'" if conn.is_postgres else
+            "WHERE station_id = %s AND qc_flag = 'VALID' "
+            "AND (grid_point IS NULL OR grid_point NOT LIKE 'synthetic:%')" if conn.is_postgres else
             "SELECT temperature, humidity, pressure, wind_speed "
             "FROM telemetry "
-            "WHERE station_id = ? AND qc_flag = 'VALID'", (clean_id,))
-        
+            "WHERE station_id = ? AND qc_flag = 'VALID' "
+            "AND (grid_point IS NULL OR grid_point NOT LIKE 'synthetic:%')", (clean_id,))
+
         rows = cur.fetchall()
-        
-    if not rows:
+
+    if len(rows) < min_records:
         return None
-        
+
     temps = sorted([r["temperature"] for r in rows if r["temperature"] is not None])
     hums = sorted([r["humidity"] for r in rows if r["humidity"] is not None])
     press = sorted([r["pressure"] for r in rows if r["pressure"] is not None])
     winds = sorted([r["wind_speed"] for r in rows if r["wind_speed"] is not None])
-    
+
     if len(temps) == 0:
         return None
-        
-    def get_percentile(data: List[float], p: float) -> float:
-        if not data: return 0.0
+
+    def get_percentile(data: List[float], p: float) -> Optional[float]:
+        if not data: return None
         idx = (len(data) - 1) * p
         lower = int(math.floor(idx))
         upper = int(math.ceil(idx))

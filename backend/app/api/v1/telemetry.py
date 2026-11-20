@@ -10,7 +10,6 @@ from backend.app.storage.database import (
     get_station_telemetry_stats,
     insert_telemetry_batch,
     list_assessments,
-    calibrate_station_qc,
 )
 from backend.app.storage.database import get_db
 from backend.app.api.v1.auth import get_current_user, require_station_access
