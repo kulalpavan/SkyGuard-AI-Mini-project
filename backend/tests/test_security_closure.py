@@ -3,7 +3,7 @@ import pytest
 from fastapi.testclient import TestClient
 from backend.app.main import app
 from backend.app.auth.security import hash_password, verify_password, create_access_token
-from backend.app.storage.database import init_db, get_db, create_training_job
+from backend.app.storage.database import init_db, get_db, create_training_job, set_active_fault, get_active_fault
 
 
 @pytest.fixture
@@ -63,4 +63,35 @@ def test_job_id_ownership_and_fleet_reset(secured):
     job = create_training_job("SEC-B", "security-test")
     assert client.get(f"/api/v1/stations/SEC-A/training-jobs/{job}/status", headers=operator).status_code == 404
     assert client.get(f"/api/v1/stations/SEC-B/training-jobs/{job}/status", headers=admin).status_code == 200
-    assert client.post("/api/v1/stations/fleet/faults/reset", headers=operator).status_code == 403
+    # Unauthenticated callers are still blocked from the fleet reset.
+    assert client.post("/api/v1/stations/fleet/faults/reset").status_code == 401
+
+
+def test_fleet_reset_operator_scoped_to_own_station(secured):
+    """An operator reset clears only their own station; admin clears the fleet."""
+    client, admin, operator = secured
+    set_active_fault("SEC-A", "SPIKE", 8.5)
+    set_active_fault("SEC-B", "SPIKE", 8.5)
+    with get_db() as conn:
+        cur = conn.cursor()
+        now = "2026-11-24T09:00:00+00:00"
+        cur.execute("INSERT INTO incidents (id, station_id, created_at, updated_at) VALUES (?, ?, ?, ?)", ("sec-inc-a", "SEC-A", now, now))
+        cur.execute("INSERT INTO incidents (id, station_id, created_at, updated_at) VALUES (?, ?, ?, ?)", ("sec-inc-b", "SEC-B", now, now))
+    resp = client.post("/api/v1/stations/fleet/faults/reset", headers=operator)
+    assert resp.status_code == 200
+    assert resp.json()["scope"] == "station"
+    assert resp.json()["station_id"] == "SEC-A"
+    assert get_active_fault("SEC-A") is None
+    assert get_active_fault("SEC-B") is not None
+    with get_db() as conn:
+        cur = conn.cursor()
+        assert cur.execute("SELECT COUNT(*) AS c FROM incidents WHERE station_id = 'SEC-A'").fetchone()["c"] == 0
+        assert cur.execute("SELECT COUNT(*) AS c FROM incidents WHERE station_id = 'SEC-B'").fetchone()["c"] == 1
+    # Admin still clears the whole fleet.
+    resp = client.post("/api/v1/stations/fleet/faults/reset", headers=admin)
+    assert resp.status_code == 200
+    assert resp.json()["scope"] == "fleet"
+    assert get_active_fault("SEC-B") is None
+    with get_db() as conn:
+        cur = conn.cursor()
+        assert cur.execute("SELECT COUNT(*) AS c FROM incidents WHERE station_id = 'SEC-B'").fetchone()["c"] == 0
