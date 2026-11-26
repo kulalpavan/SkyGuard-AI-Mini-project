@@ -1,6 +1,7 @@
 import io
 import csv
 import json
+import uuid
 import datetime
 from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, status, Body, BackgroundTasks, Request, Header
 from typing import Optional, Dict, Any, List
@@ -45,6 +46,59 @@ def log_ingest_audit(station_id: str, device_id: Optional[str], user: Dict[str, 
                VALUES (?, ?, ?, ?, ?, ?, ?)""",
             (station_id, device_id, user.get("sub"), user.get("role"), client_ip, int(success), detail)
         )
+
+# =============================================================================
+# CSV upload jobs (async historical ingestion)
+# =============================================================================
+# A CSV upload can hold far more rows than a single HTTP request can process
+# synchronously (the observation pipeline assesses every row, ~0.15 s each,
+# so 15,702 rows takes ~40 min). The upload endpoint therefore parses the
+# file, queues the rows, and returns immediately; a background task does the
+# chunked batch ingestion and the UI polls the job status until it is done.
+_UPLOAD_JOBS: Dict[str, Dict[str, Any]] = {}
+
+def _run_upload_job(job_id: str, station_id: str, parsed_rows: List[Dict[str, Any]],
+                    rejected_rows: List[Dict[str, Any]], warnings: List[str]) -> None:
+    """Background worker: ingest the parsed rows in chunks and record the
+    aggregated result on the job so the UI can poll for it.
+
+    Historical backfill uses the fast bulk-insert path, NOT the real-time
+    observation pipeline. The pipeline assesses every row (~0.15 s each:
+    history fetch, baseline, drift check, a DB commit per row), so a
+    15,702-row file takes ~40 min through it and the request times out.
+    Bulk insert does the same deduplicated insert in one transaction per
+    chunk and finishes in seconds; the data lands in the telemetry table
+    ready for model training, which is what historical ingestion is for.
+    (Live ESP32 frames still go through the full pipeline.)"""
+    from backend.app.storage.database import insert_telemetry_batch
+    job = _UPLOAD_JOBS.get(job_id)
+    if job is None:
+        return
+    BATCH_SIZE = 2000
+    accepted = duplicates = rejected = 0
+    try:
+        for start in range(0, len(parsed_rows), BATCH_SIZE):
+            chunk = parsed_rows[start:start + BATCH_SIZE]
+            inserted, errors = insert_telemetry_batch(station_id, chunk)
+            accepted += inserted
+            rejected += errors
+            duplicates += len(chunk) - inserted - errors
+            job["accepted"] = accepted
+            job["duplicates"] = duplicates
+            job["rejected"] = rejected
+            job["rows_processed"] = min(start + BATCH_SIZE, len(parsed_rows))
+        job["status"] = "done"
+        job["success"] = accepted + duplicates > 0
+        job["rows_rejected"] = len(rejected_rows) + rejected
+        job["validation_warnings"] = warnings[:15]
+        job["rejection_sample"] = rejected_rows[:5]
+        job["total_records"] = get_station_telemetry_stats(station_id).get("total_records", 0)
+    except Exception as exc:  # noqa: BLE001 - surface the failure to the poller
+        logger.exception("Upload job %s failed: %s", job_id, exc)
+        job["status"] = "failed"
+        job["success"] = False
+        job["error"] = str(exc)
+
 
 router = APIRouter(tags=["Telemetry Ingestion & Stats"])
 
@@ -442,15 +496,58 @@ async def upload_station_telemetry(
             }
         )
 
-    from backend.app.services.observation_pipeline import observation_pipeline
-    result = observation_pipeline.batch(clean_target_id, parsed_rows)
-    return {
-        **result, "success": result["accepted"] + result["duplicates"] > 0,
-        "station_id": clean_target_id, "rows_queued": len(parsed_rows),
+    # Ingesting a CSV through the observation pipeline is slow (~0.15 s per
+    # row: history fetch, baseline, drift check, DB commit per row), so a
+    # 15,702-row file takes ~40 min synchronously and the request times out.
+    # Queue the rows and ingest them in a background task instead; the UI
+    # polls the job status endpoint below until the job is done. The pipeline
+    # still caps a single batch at 10,000 rows, so the worker chunks the rows.
+    job_id = uuid.uuid4().hex
+    _UPLOAD_JOBS[job_id] = {
+        "job_id": job_id,
+        "status": "processing",
+        "success": False,
+        "station_id": clean_target_id,
+        "rows_queued": len(parsed_rows),
+        "rows_processed": 0,
+        "accepted": 0,
+        "duplicates": 0,
+        "rejected": 0,
+        "rows_rejected": len(rejected_rows),
+        "validation_warnings": warnings[:15],
+        "rejection_sample": rejected_rows[:5],
         "total_records": get_station_telemetry_stats(clean_target_id).get("total_records", 0),
-        "rows_rejected": len(rejected_rows) + result["rejected"],
-        "validation_warnings": warnings[:15], "rejection_sample": rejected_rows[:5],
+        "error": None,
     }
+    background_tasks.add_task(_run_upload_job, job_id, clean_target_id, parsed_rows, rejected_rows, warnings)
+    return {
+        "success": True,
+        "job_id": job_id,
+        "status": "processing",
+        "station_id": clean_target_id,
+        "rows_queued": len(parsed_rows),
+        "rows_uploaded": 0,
+        "rows_rejected": len(rejected_rows),
+        "total_records": get_station_telemetry_stats(clean_target_id).get("total_records", 0),
+        "validation_warnings": warnings[:15],
+        "rejection_sample": rejected_rows[:5],
+        "message": f"Upload accepted: ingesting {len(parsed_rows)} rows in the background.",
+    }
+
+
+@router.get("/stations/{station_id}/telemetry/upload/{job_id}")
+def get_upload_job_status(
+    station_id: str,
+    job_id: str,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+):
+    """Poll the status of a background CSV upload job started by the upload endpoint."""
+    clean_target_id = station_id.strip().upper()
+    require_station_access(clean_target_id, current_user)
+    job = _UPLOAD_JOBS.get(job_id)
+    if job is None or job.get("station_id") != clean_target_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Upload job not found.")
+    return {"success": True, **job}
 
 
 @router.post("/stations/{station_id}/telemetry/batch")
