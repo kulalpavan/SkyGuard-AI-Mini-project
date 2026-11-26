@@ -8,7 +8,7 @@ from backend.app.storage.database import (
     clear_all_active_faults,
     clear_all_incidents
 )
-from backend.app.api.v1.auth import get_current_user, require_admin, require_station_access
+from backend.app.api.v1.auth import get_current_user, require_station_access
 from backend.app.services.weather_service import weather_service
 from backend.app.config import DEMO_MODE
 
@@ -17,20 +17,53 @@ router = APIRouter(tags=["Fault Injection"])
 
 @router.post("/stations/fleet/faults/reset")
 def reset_fleet(
-    current_user: Dict[str, Any] = Depends(require_admin)
+    current_user: Dict[str, Any] = Depends(get_current_user)
 ):
-    """Reset the complete deterministic demo fleet to a clean normal state."""
+    """Reset the deterministic demo fleet to a clean normal state.
+
+    Central Admin resets the whole fleet (existing behaviour). A Station
+    Operator resets only their own assigned station — the server enforces
+    that boundary, so an operator can never wipe another station's faults
+    or incidents through this endpoint.
+    """
     if not DEMO_MODE:
         raise HTTPException(status_code=403, detail="Fault controls require DEMO_MODE")
-    cleared_faults = clear_all_active_faults()
-    cleared_incidents = clear_all_incidents()
-    weather_service.reevaluate()
-    return {
-        "success": True,
-        "cleared_faults": cleared_faults,
-        "cleared_incidents": cleared_incidents,
-        "message": "Fleet reset completed and live state reevaluated."
-    }
+    role = current_user.get("role")
+    if role == "admin":
+        cleared_faults = clear_all_active_faults()
+        cleared_incidents = clear_all_incidents()
+        weather_service.reevaluate()
+        return {
+            "success": True,
+            "scope": "fleet",
+            "cleared_faults": cleared_faults,
+            "cleared_incidents": cleared_incidents,
+            "message": "Fleet reset completed and live state reevaluated."
+        }
+    if role == "station_operator":
+        station_id = str(current_user.get("station_id", "")).strip().upper()
+        if not station_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Station Operator has no assigned station to reset"
+            )
+        require_station_access(station_id, current_user)
+        had_fault = get_active_fault(station_id) is not None
+        clear_active_fault(station_id)
+        cleared_incidents = clear_all_incidents(station_id)
+        weather_service.reevaluate()
+        return {
+            "success": True,
+            "scope": "station",
+            "station_id": station_id,
+            "cleared_faults": 1 if had_fault else 0,
+            "cleared_incidents": cleared_incidents,
+            "message": f"Station {station_id} reset completed and live state reevaluated."
+        }
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Access forbidden: Central Administrator or Station Operator privileges required"
+    )
 
 
 @router.post("/stations/{station_id}/faults/inject")

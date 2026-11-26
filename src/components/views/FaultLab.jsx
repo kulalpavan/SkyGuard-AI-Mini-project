@@ -353,10 +353,22 @@ export const FaultLab = () => {
     }
   };
 
-  const handleReset = () => {
+  const handleReset = async () => {
     tacticalAudio.playClick();
-    clearFaults();
-    clearAllFaultBaselines(window.localStorage);
+    const result = await clearFaults();
+    if (!result?.success) {
+      // Do not clear local state or play the success sound: the backend
+      // rejected the reset, so the fault and incident are still there.
+      setSendState({ phase: 'error', message: `Reset failed: ${result?.error || 'the backend rejected the reset'}` });
+      return;
+    }
+    // An operator only forgets their own station's baseline; an admin
+    // resets the whole fleet, so every baseline goes.
+    if (role === 'station_operator' && assignedStationId) {
+      clearFaultBaseline(window.localStorage, assignedStationId);
+    } else {
+      clearAllFaultBaselines(window.localStorage);
+    }
     setLastInjected(null);
     setSendState(null);
     setActiveEpisode(null);
