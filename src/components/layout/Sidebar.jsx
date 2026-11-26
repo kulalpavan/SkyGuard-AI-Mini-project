@@ -5,7 +5,7 @@ import { tacticalAudio } from '../../utils/audio';
 import { apiClient } from '../../utils/apiClient';
 
 export const Sidebar = ({ collapsed, setCollapsed }) => {
-  const { role, user, logout, assignedStationId } = useAuth();
+  const { role, logout, assignedStationId } = useAuth();
   const { currentView, setCurrentView, incidents, offlineBuffer, activeStationId, stations, setActiveStationId, activeStationModels } = useWeather();
   const [audioActive, setAudioActive] = useState(true);
   const [modelRegistry, setModelRegistry] = useState({});
@@ -382,21 +382,6 @@ export const Sidebar = ({ collapsed, setCollapsed }) => {
           <i className={`fa-solid fa-volume-${audioActive ? 'high' : 'xmark'}`}></i>
           <span>AUDIO: {audioActive ? 'ON' : 'MUTED'}</span>
         </button>
-
-        <div className="operator-profile">
-          <div className="operator-avatar">
-            <i className="fa-solid fa-user-astronaut"></i>
-          </div>
-          <div className="operator-info">
-            <div className="operator-name" id="operator-name-display">
-              {role === 'admin' ? (user?.name || "COMMAND SUPERVISOR") : (user?.name || `${activeStationId} OPERATOR`)}
-            </div>
-            <div className="operator-role" id="operator-role-display">
-              <span className="pulse-dot pulse-green"></span>
-              {role === 'admin' ? ' CENTRAL LEAD' : ` ${activeStationId} FIELD UNIT`}
-            </div>
-          </div>
-        </div>
 
         <button
           className="cyber-btn btn-sm btn-danger"
