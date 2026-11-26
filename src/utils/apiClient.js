@@ -247,6 +247,10 @@ class ApiClient {
     }
   }
 
+  async getUploadJobStatus(stationId, jobId) {
+    return await this.request(`/stations/${stationId}/telemetry/upload/${jobId}`);
+  }
+
   async replayTelemetryBatch(stationId, rows) {
     return this.post(`/stations/${encodeURIComponent(stationId)}/telemetry/batch`, rows);
   }

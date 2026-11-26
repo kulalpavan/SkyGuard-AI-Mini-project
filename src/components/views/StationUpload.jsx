@@ -267,18 +267,50 @@ export const StationUpload = () => {
         // 2. Ingest to SQLite via Backend API
         try {
           const uploadRes = await apiClient.uploadStationTelemetry(activeStationId, file);
+          // Large CSVs are ingested in the background (the pipeline assesses
+          // every row, so a 15k-row file takes far longer than one HTTP
+          // request can stay open). Poll the job until it finishes, then
+          // show the final counts.
+          let finalRes = uploadRes;
+          if (uploadRes.job_id && uploadRes.status === 'processing') {
+            setUploadFeedback({
+              success: true,
+              rows_uploaded: 0,
+              rows_rejected: uploadRes.rows_rejected || 0,
+              warnings: uploadRes.validation_warnings || [],
+              message: `Ingesting ${uploadRes.rows_queued} rows in the background — this takes a few minutes for a large file.`
+            });
+            for (let attempt = 0; attempt < 600; attempt++) {
+              await new Promise((resolve) => setTimeout(resolve, 2000));
+              const job = await apiClient.getUploadJobStatus(activeStationId, uploadRes.job_id);
+              if (job.status === 'done' || job.status === 'failed') {
+                finalRes = job;
+                break;
+              }
+              setUploadFeedback({
+                success: true,
+                rows_uploaded: job.accepted || 0,
+                rows_rejected: job.rows_rejected || 0,
+                warnings: job.validation_warnings || [],
+                message: `Ingesting… ${job.rows_processed || 0} / ${job.rows_queued} rows.`
+              });
+            }
+            if (finalRes.status === 'failed') {
+              throw new Error(finalRes.error || 'Background ingestion failed.');
+            }
+          }
           setUploadFeedback({
             success: true,
-            rows_uploaded: uploadRes.rows_uploaded,
-            rows_rejected: uploadRes.rows_rejected,
-            warnings: uploadRes.validation_warnings || [],
-            message: uploadRes.message
+            rows_uploaded: finalRes.accepted ?? finalRes.rows_uploaded,
+            rows_rejected: finalRes.rows_rejected,
+            warnings: finalRes.validation_warnings || [],
+            message: finalRes.message
           });
           tacticalAudio.playSuccess();
-          if (uploadRes.total_records !== undefined) {
+          if (finalRes.total_records !== undefined) {
             setDbStats(prev => ({
               ...prev,
-              total_records: uploadRes.total_records
+              total_records: finalRes.total_records
             }));
           }
           await refreshStationStats(activeStationId);
